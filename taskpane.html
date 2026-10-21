@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>表記チェック</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  body { font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif; margin: 0; padding: 12px; color: #222; font-size: 13px; }
+  h1 { font-size: 16px; margin: 0 0 4px; color: #1F4E9E; }
+  p.sub { margin: 0 0 12px; color: #666; }
+  button { display: block; width: 100%; margin: 8px 0; padding: 10px; font-size: 14px; border: 1px solid #1F4E9E; border-radius: 6px; background: #fff; color: #1F4E9E; cursor: pointer; }
+  button.main { background: #1F4E9E; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .step { font-size: 11px; color: #1F4E9E; margin: 14px 0 0; font-weight: bold; }
+  #status { margin: 12px 0 6px; padding: 8px; background: #EEF3FB; border-radius: 6px; min-height: 18px; }
+  #log { white-space: pre-wrap; font-size: 12px; background: #fafafa; border: 1px solid #ddd; border-radius: 6px; padding: 8px; max-height: 340px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>表記チェック(テスト版 v0.1)</h1>
+<p class="sub">チェック → 確認 → 置換 の順で使います</p>
+
+<div class="step">STEP 1  チェック(文書は変えません)</div>
+<button id="btnCheck">チェックする</button>
+
+<div class="step">STEP 2  置換(変更履歴つきで直します)</div>
+<button id="btnFix" class="main">自動修正を実行する</button>
+
+<div class="step">STEP 3  元に戻す</div>
+<button id="btnUndoSel">選択範囲の変更を元に戻す</button>
+
+<div class="step">うまく動かないとき</div>
+<button id="btnInfo">テスト情報を表示する</button>
+
+<div id="status">準備中…</div>
+<div id="log"></div>
+
+<script src="engine.js"></script>
+<script src="taskpane.js"></script>
+</body>
+</html>
