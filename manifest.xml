@@ -13,9 +13,9 @@
   <DefaultLocale>ja-JP</DefaultLocale>
   <DisplayName DefaultValue="表記チェック(テスト版 v0.2.1)"/>
   <Description DefaultValue="原稿の表記を、チェックして直すアドインです。"/>
-  <IconUrl DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-32.png"/>
-  <HighResolutionIconUrl DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-80.png"/>
-  <SupportUrl DefaultValue="https://officelotion.github.io/notation-check-word/"/>
+  <IconUrl DefaultValue="https://officelotion.github.io/notation-check-addon/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://officelotion.github.io/notation-check-addon/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://officelotion.github.io/notation-check-addon/"/>
   <AppDomains>
     <AppDomain>https://officelotion.github.io</AppDomain>
   </AppDomains>
@@ -29,7 +29,7 @@
     </Sets>
   </Requirements>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://officelotion.github.io/notation-check-word/taskpane.html"/>
+    <SourceLocation DefaultValue="https://officelotion.github.io/notation-check-addon/taskpane.html"/>
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
 
@@ -76,13 +76,13 @@
     </Hosts>
     <Resources>
       <bt:Images>
-        <bt:Image id="Icon.16" DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-16.png"/>
-        <bt:Image id="Icon.32" DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-32.png"/>
-        <bt:Image id="Icon.80" DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-80.png"/>
+        <bt:Image id="Icon.16" DefaultValue="https://officelotion.github.io/notation-check-addon/assets/icon-16.png"/>
+        <bt:Image id="Icon.32" DefaultValue="https://officelotion.github.io/notation-check-addon/assets/icon-32.png"/>
+        <bt:Image id="Icon.80" DefaultValue="https://officelotion.github.io/notation-check-addon/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://officelotion.github.io/notation-check-word/taskpane.html"/>
-        <bt:Url id="Support.Url" DefaultValue="https://officelotion.github.io/notation-check-word/"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://officelotion.github.io/notation-check-addon/taskpane.html"/>
+        <bt:Url id="Support.Url" DefaultValue="https://officelotion.github.io/notation-check-addon/"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="表記チェック"/>
