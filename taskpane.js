@@ -1,4 +1,4 @@
-/* 表記チェック Word版 ― アドインの画面とWordの接続 (taskpane.js)  v0.2.1(テスト版) */
+/* 表記チェック Word版 ― アドインの画面とWordの接続 (taskpane.js)  v0.3(テスト版) */
 /* global Office, Word, NotationEngine */
 (function () {
   'use strict';
@@ -123,22 +123,87 @@
     busy(false);
   }
 
-  // ---- 枠・網かけを外す(Wordの種類によって使える命令が違うため、結果を記録する) ----
+  // ---- 枠・網かけを外す ----
+  // 1回目: Wordの命令で外す(Macでは Font.shading が無いなど、使えない命令がある)
+  // 2回目: 外れずに残った【●】を、「枠・網かけなし」の文字として、OOXMLで入れ直す
   async function trySet(ctx, fn) {
     try { fn(); await ctx.sync(); return ''; }
     catch (e) { return errText(e).slice(0, 80); }
   }
-  async function clearBox(ctx, rng) {
+  async function clearBoxApi(ctx, rng) {
     var r = {};
-    r.border = await trySet(ctx, function () { rng.font.borders.outsideBorderType = 'None'; });
-    // 網かけの模様(15%など)は、色を白にしても残るため、模様を「なし」にする
-    var t1 = await trySet(ctx, function () { rng.font.shading.texture = 'None'; });
-    if (t1) {
-      var t2 = await trySet(ctx, function () { rng.font.shading.texture = 'TextureNone'; });
-      r.texture = t2 ? ('None: ' + t1 + ' / TextureNone: ' + t2) : '';
-    } else r.texture = '';
-    r.color = await trySet(ctx, function () { rng.font.shading.backgroundPatternColor = '#FFFFFF'; });
+    // 枠(Font.borders の各辺を、見えなくする)
+    r.border = '';
+    try {
+      var bs = rng.font.borders; bs.load('items'); await ctx.sync();
+      bs.items.forEach(function (b) { b.visible = false; });
+      await ctx.sync();
+    } catch (e) { r.border = errText(e).slice(0, 80); }
+    // 網かけ(Range.shading。模様を「なし」にして、背景を白にする)
+    var t1 = await trySet(ctx, function () { rng.shading.texture = 'TextureNone'; });
+    if (t1) { var t2 = await trySet(ctx, function () { rng.shading.texture = 'None'; }); r.texture = t2 ? t1 : ''; } else r.texture = '';
+    r.color = await trySet(ctx, function () { rng.shading.backgroundPatternColor = '#FFFFFF'; });
     return r;
+  }
+
+  var LABEL_RE = /^【.{1,4}】$/;
+  // 枠・網かけが残っている【●】を探す(段落の番号と、同じ文字列の何番目か)
+  function boxedLabelRuns(model) {
+    var out = [];
+    model.forEach(function (p, pi) {
+      var text = NotationEngine.joined(p), pos = 0;
+      p.runs.forEach(function (r) {
+        var start = pos; pos += r.text.length;
+        var t = r.text.trim();
+        if (r.boxed && LABEL_RE.test(t)) out.push({ para: pi, text: t, occ: NotationEngine.countBefore(text, t, start) });
+      });
+    });
+    return out;
+  }
+  function nonEmptyIdx(arr, getText) {
+    var m = [];
+    arr.forEach(function (x, i) { if (norm(getText(x))) m.push(i); });
+    return m;
+  }
+  function ooxmlPlainRun(text) {
+    var esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' +
+      '<pkg:part pkg:name="/_rels/.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml"><pkg:xmlData>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' +
+      '</pkg:xmlData></pkg:part>' +
+      '<pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"><pkg:xmlData>' +
+      '<w:document xmlns:w="' + W_NS + '"><w:body><w:p><w:r><w:rPr><w:bdr w:val="nil"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/></w:rPr>' +
+      '<w:t xml:space="preserve">' + esc + '</w:t></w:r></w:p></w:body></w:document></pkg:xmlData></pkg:part></pkg:package>';
+  }
+  // 残った枠・網かけを、OOXMLで入れ直して外す。戻り値: {found, done, ng}
+  async function fixRemainingBoxes(ctx) {
+    var L = await loadModel(ctx);
+    var runs = boxedLabelRuns(L.model);
+    var res = { found: runs.length, done: 0, ng: 0 };
+    if (!runs.length) return res;
+    var mIdx = nonEmptyIdx(L.model, NotationEngine.joined);
+    var wIdx = nonEmptyIdx(L.wp, function (p) { return p.text; });
+    var work = runs.map(function (r) {
+      var rank = mIdx.indexOf(r.para);
+      var wp = (rank >= 0 && wIdx[rank] !== undefined) ? L.wp[wIdx[rank]] : null;
+      return { para: wp, text: r.text, occ: r.occ, pi: r.para };
+    });
+    var searches = work.map(function (w) {
+      if (!w.para) return null;
+      var rs = w.para.search(w.text, { matchCase: true });
+      rs.load('items/text');
+      return rs;
+    });
+    await ctx.sync();
+    for (var i = work.length - 1; i >= 0; i--) {
+      var w = work[i];
+      var cands = searches[i] ? searches[i].items.filter(function (r) { return r.text === w.text; }) : [];
+      var t = cands[w.occ];
+      if (!t) { res.ng++; log('  × ' + show(w.text) + '(解析' + (w.pi + 1) + '番目の段落)の場所を特定できません'); continue; }
+      try { t.insertOoxml(ooxmlPlainRun(w.text), 'Replace'); await ctx.sync(); res.done++; }
+      catch (e) { res.ng++; log('  × ' + show(w.text) + ' をOOXMLで入れ直せません: ' + errText(e)); }
+    }
+    return res;
   }
 
   // ---- STEP 2: 置換(変更履歴つき) ----
@@ -146,7 +211,7 @@
   //       ②探した場所を、後ろから順に変える ③最後に、文書を読み直して、予定どおりの文字になったか確かめる
   async function doFix() {
     busy(true); logEl.textContent = ''; status('置換中…');
-    var okN = 0, ngN = 0, boxStat = { n: 0, border: {}, texture: {}, color: {} };
+    var okN = 0, ngN = 0, boxStat = { n: 0, border: {}, texture: {}, color: {} }, boxFix = null, boxLeft0 = 0;
     var prevMode = null, modeChanged = false;
     try {
       await Word.run(async function (ctx) {
@@ -197,7 +262,7 @@
               else nr = target.insertText(cls.text, 'Replace');
               await ctx.sync();
               if (e.box && nr) {
-                var res = await clearBox(ctx, nr);
+                var res = await clearBoxApi(ctx, nr);
                 boxStat.n++;
                 ['border', 'texture', 'color'].forEach(function (key) {
                   var v = res[key] || '○';
@@ -208,6 +273,11 @@
             } catch (err) { ngN++; log('  × 段落' + (pi + 1) + ' ' + show(e.before) + ' の変更に失敗: ' + errText(err)); }
           }
         }
+
+        // ②b 枠・網かけが残っていないか確かめ、残っていればOOXMLで入れ直す
+        var Lb = await loadModel(ctx);
+        boxLeft0 = boxedLabelRuns(Lb.model).length;
+        if (boxLeft0) boxFix = await fixRemainingBoxes(ctx);
 
         // ③ 確かめる(空でない段落の並びを、予定と比べる)
         var L2 = await loadModel(ctx);
@@ -221,12 +291,16 @@
         log('\n変更履歴つきで直しました。「校閲」タブの変更履歴で確認できます。');
         log('\n【確認】予定どおりの文字になったか: ' + (bad.length ? '不一致 ' + bad.length + ' 段落' : 'すべて一致'));
         bad.slice(0, 5).forEach(function (b) { log('  ' + b); });
-        if (boxStat.n) {
-          log('\n【枠・網かけを外す処理】 ' + boxStat.n + ' 箇所');
+        var left = boxedLabelRuns(L2.model).length;
+        log('\n【枠・網かけ】 外す対象 ' + boxStat.n + ' 箇所');
+        log('  Wordの命令で外せなかった数: ' + boxLeft0 + ' 箇所' + (boxLeft0 ? '(下の2回目で入れ直し)' : ''));
+        if (boxFix) log('  OOXMLで入れ直した数: ' + boxFix.done + ' 箇所' + (boxFix.ng ? ' / 失敗 ' + boxFix.ng : ''));
+        log('  最終的に枠・網かけが残った数: ' + left + ' 箇所' + (left ? '  ← 手で外す必要があります' : '  ← OK'));
+        if (boxStat.n && boxLeft0) {
+          log('  (参考) 1回目の命令の結果:');
           [['border', '枠'], ['texture', '網かけの模様'], ['color', '網かけの色']].forEach(function (p) {
-            log('  ' + p[1] + ': ' + Object.keys(boxStat[p[0]]).map(function (v) { return v + ' ×' + boxStat[p[0]][v]; }).join(' / '));
+            log('    ' + p[1] + ': ' + Object.keys(boxStat[p[0]]).map(function (v) { return v + ' ×' + boxStat[p[0]][v]; }).join(' / '));
           });
-          log('  (○以外は、使えなかった命令です。この文字列をそのまま作者に知らせてください)');
         }
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e) + (e.debugInfo ? '\n' + JSON.stringify(e.debugInfo) : '')); }
@@ -239,33 +313,40 @@
   }
 
   // ---- STEP 3: 選択範囲の変更を元に戻す ----
+  // 「対」→「【対】」は、削除と追加の2つの変更になる。選択の端に接する側が漏れると、文字が消えたように見えるため、
+  // 選択範囲に「重なる」「隣り合う」変更を、段落ごとに集めて、まとめて戻す
   async function doUndo(all) {
     busy(true); logEl.textContent = ''; status('元に戻し中…');
     try {
       await Word.run(async function (ctx) {
         var sel = ctx.document.getSelection();
         sel.load('isEmpty');
-        var tcs = sel.getTrackedChanges();
-        tcs.load('items/date,items/type,items/author');
+        var paras = sel.paragraphs; paras.load('items');
         await ctx.sync();
         if (sel.isEmpty) { status('範囲を選択してください'); log('元に戻したい範囲を、ドラッグで選択してから押してください。'); return; }
+        var lists = paras.items.map(function (p) { var t = p.getRange('Whole').getTrackedChanges(); t.load('items/date,items/type'); return t; });
+        await ctx.sync();
+        var cand = [];
+        lists.forEach(function (l) { l.items.forEach(function (tc) { cand.push({ tc: tc, rel: tc.getRange().compareLocationWith(sel) }); }); });
+        await ctx.sync();
+        var hit = cand.filter(function (c) { return ['Before', 'After', 'Unrelated'].indexOf(c.rel.value) < 0; });
+        if (!hit.length) { status('選択範囲に変更履歴はありません'); return; }
         var since = 0;
         try { since = parseInt(localStorage.getItem(LS_KEY) || '0', 10) || 0; } catch (e) { /* なし */ }
-        var items = tcs.items;
-        if (!items.length) { status('選択範囲に変更履歴はありません'); return; }
-        var mine = (all || !since) ? items : items.filter(function (tc) { return tc.date && tc.date.getTime() >= since - 3000; });
-        var other = items.length - mine.length;
+        var mine = (all || !since) ? hit : hit.filter(function (c) { return c.tc.date && c.tc.date.getTime() >= since - 61000; });
+        var other = hit.length - mine.length;
         if (!mine.length) {
           status('このアドインの変更は、選択範囲にありません');
-          log('選択範囲にある変更履歴 ' + items.length + ' 件は、アドインの修正より前のものです。残しました。\nすべて戻したいときは「選択範囲のすべての変更履歴を戻す」を使ってください。');
+          log('選択範囲にある変更履歴 ' + hit.length + ' 件は、アドインの修正より前のものです。残しました。\nすべて戻したいときは「選択範囲のすべての変更履歴を戻す」を使ってください。');
           return;
         }
-        var kinds = {};
-        mine.forEach(function (tc) { kinds[tc.type] = (kinds[tc.type] || 0) + 1; });
-        mine.forEach(function (tc) { tc.reject(); });
+        var kinds = {}, rels = {};
+        mine.forEach(function (c) { kinds[c.tc.type] = (kinds[c.tc.type] || 0) + 1; rels[c.rel.value] = (rels[c.rel.value] || 0) + 1; });
+        mine.forEach(function (c) { c.tc.reject(); });
         await ctx.sync();
         status('選択範囲の変更を ' + mine.length + ' 件、元に戻しました');
         log('内訳: ' + Object.keys(kinds).map(function (k) { return k + ' ' + kinds[k]; }).join(' / '));
+        log('選択範囲との位置関係: ' + Object.keys(rels).map(function (k) { return k + ' ' + rels[k]; }).join(' / '));
         if (other) log('アドインの修正より前の変更履歴 ' + other + ' 件は、残しました。');
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e) + '\n(選択範囲の取り消しに対応していないWordかもしれません。「テスト情報」で WordApi 1.6 を確認してください)'); }
@@ -277,7 +358,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.2.1');
+    log('アドイン v0.3');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
