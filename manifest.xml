@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- 【配布前に必ず書き換える】 YOUR-ACCOUNT を、自分のGitHubのユーザー名にする(全部で7か所) -->
+<!-- 【配布前に必ず書き換える】 officelotion を、自分のGitHubのユーザー名にする(全部で11か所。メモ帳の「置換」で一括OK) -->
 <OfficeApp
   xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -7,11 +7,11 @@
   xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
   xsi:type="TaskPaneApp">
 
-  <Id>DDC9FD77-30B9-4F60-9DFB-E1E1ECC759C2</Id>
-  <Version>1.0.0.0</Version>
+  <Id>f7b0ef9c-30e6-4087-bafc-4076f5bcfbef</Id>
+  <Version>0.2.1.0</Version>
   <ProviderName>表記チェック</ProviderName>
   <DefaultLocale>ja-JP</DefaultLocale>
-  <DisplayName DefaultValue="表記チェック(テスト版)"/>
+  <DisplayName DefaultValue="表記チェック(テスト版 v0.2.1)"/>
   <Description DefaultValue="原稿の表記を、チェックして直すアドインです。"/>
   <IconUrl DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://officelotion.github.io/notation-check-word/assets/icon-80.png"/>
@@ -23,6 +23,11 @@
   <Hosts>
     <Host Name="Document"/>
   </Hosts>
+  <Requirements>
+    <Sets DefaultMinVersion="1.4">
+      <Set Name="WordApi" MinVersion="1.4"/>
+    </Sets>
+  </Requirements>
   <DefaultSettings>
     <SourceLocation DefaultValue="https://officelotion.github.io/notation-check-word/taskpane.html"/>
   </DefaultSettings>

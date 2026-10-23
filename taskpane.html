@@ -11,6 +11,7 @@
   p.sub { margin: 0 0 12px; color: #666; }
   button { display: block; width: 100%; margin: 8px 0; padding: 10px; font-size: 14px; border: 1px solid #1F4E9E; border-radius: 6px; background: #fff; color: #1F4E9E; cursor: pointer; }
   button.main { background: #1F4E9E; color: #fff; }
+  button.sub { font-size: 12px; padding: 7px; }
   button:disabled { opacity: .5; cursor: default; }
   .step { font-size: 11px; color: #1F4E9E; margin: 14px 0 0; font-weight: bold; }
   #status { margin: 12px 0 6px; padding: 8px; background: #EEF3FB; border-radius: 6px; min-height: 18px; }
@@ -18,8 +19,8 @@
 </style>
 </head>
 <body>
-<h1>表記チェック(テスト版 v0.1)</h1>
-<p class="sub">チェック → 確認 → 置換 の順で使います</p>
+<h1>表記チェック(テスト版 v0.2.1)</h1>
+<p class="sub">チェック → 置換 → 確認 の順で使います</p>
 
 <div class="step">STEP 1  チェック(文書は変えません)</div>
 <button id="btnCheck">チェックする</button>
@@ -27,16 +28,18 @@
 <div class="step">STEP 2  置換(変更履歴つきで直します)</div>
 <button id="btnFix" class="main">自動修正を実行する</button>
 
-<div class="step">STEP 3  元に戻す</div>
-<button id="btnUndoSel">選択範囲の変更を元に戻す</button>
+<div class="step">STEP 3  元に戻す(範囲を選択してから)</div>
+<button id="btnUndoSel">選択範囲の、アドインの変更を戻す</button>
+<button id="btnUndoAll" class="sub">選択範囲の、すべての変更履歴を戻す</button>
 
 <div class="step">うまく動かないとき</div>
 <button id="btnInfo">テスト情報を表示する</button>
+<button id="btnCopy" class="sub">下のログをコピーする</button>
 
 <div id="status">準備中…</div>
 <div id="log"></div>
 
-<script src="engine.js"></script>
-<script src="taskpane.js"></script>
+<script src="engine.js?v=0.2.1"></script>
+<script src="taskpane.js?v=0.2.1"></script>
 </body>
 </html>
