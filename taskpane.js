@@ -1,4 +1,4 @@
-/* 表記チェック Word版 ― アドインの画面とWordの接続 (taskpane.js)  v0.3(テスト版) */
+/* 表記チェック Word版 ― アドインの画面とWordの接続 (taskpane.js)  v0.3.1(テスト版) */
 /* global Office, Word, NotationEngine */
 (function () {
   'use strict';
@@ -12,6 +12,10 @@
   function status(msg) { statusEl.textContent = msg; }
   function busy(b) { BUTTONS.forEach(function (id) { if ($(id)) $(id).disabled = b; }); }
   function show(s) { return '「' + String(s).replace(/\v/g, '↵') + '」'; }
+  // 照合用: 見えない文字(異体字セレクタ・幅なし文字など)を除き、全角半角の違いをそろえる
+  function normA(s) { return String(s || '').replace(/[\u0000-\u001f\u007f\ufe00-\ufe0f\u200b-\u200d\u2060\ufeff\u00ad]/g, '').replace(/\u00a0/g, ' ').normalize('NFKC'); }
+  function cp(c) { return c === undefined ? '(なし)' : 'U+' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'); }
+  function firstDiff(a, b) { var n = Math.min(a.length, b.length), i = 0; while (i < n && a[i] === b[i]) i++; return i; }
   function norm(s) { return String(s || '').replace(/[\u0000-\u001f\u007f]/g, ''); }
   function short(s) { s = norm(s); return s.length > 40 ? s.slice(0, 40) + '…' : s; }
   function errText(e) { return (e && (e.code ? e.code + ': ' : '') + (e.message || e)) || '不明'; }
@@ -75,19 +79,22 @@
     var L = await loadModel(ctx), model = L.model, wp = L.wp;
     var m2 = [], w2 = [], skipped = [], bad = null, i = 0, j = 0;
     while (i < model.length || j < wp.length) {
-      var mt = i < model.length ? norm(NotationEngine.joined(model[i])) : null;
-      var wt = j < wp.length ? norm(wp[j].text) : null;
+      var mt = i < model.length ? normA(NotationEngine.joined(model[i])) : null;
+      var wt = j < wp.length ? normA(wp[j].text) : null;
       if (mt !== null && wt !== null && mt === wt) { m2.push(model[i]); w2.push(wp[j]); i++; j++; }
       else if (mt === '') { skipped.push('解析' + (i + 1) + '番目(空)'); i++; }
       else if (wt === '') { skipped.push('Word' + (j + 1) + '番目(空)'); j++; }
       else { bad = { i: i, j: j, mt: mt, wt: wt }; break; }
     }
-    return { model: m2, wordParas: w2, skipped: skipped, bad: bad, nModel: model.length, nWord: wp.length, aligned: !bad };
+    return { model: m2, raw: model, wordParas: w2, skipped: skipped, bad: bad, nModel: model.length, nWord: wp.length, aligned: !bad };
   }
   function explainMisalign(d) {
-    var b = d.bad;
+    var b = d.bad, k = firstDiff(b.mt, b.wt);
+    function around(t) { return show(t.slice(Math.max(0, k - 8), k + 12)); }
     return '段落の照合が、ここで止まりました(Word ' + d.nWord + ' 段落 / 解析 ' + d.nModel + ' 段落)。' +
-      '\n  Word ' + (b.j + 1) + '番目 = ' + show(short(b.wt)) + '\n  解析 ' + (b.i + 1) + '番目 = ' + show(short(b.mt)) +
+      '\n  食い違いの場所: 段落の先頭から ' + (k + 1) + ' 文字め' +
+      '\n  Word ' + (b.j + 1) + '番目: ' + around(b.wt) + '  文字コード ' + cp(b.wt[k]) +
+      '\n  解析 ' + (b.i + 1) + '番目: ' + around(b.mt) + '  文字コード ' + cp(b.mt[k]) +
       '\n(すでに変更履歴がある文書では、削除された文字のために食い違うことがあります)';
   }
 
@@ -102,7 +109,7 @@
       log('  段落' + (c.para + 1) + ' [' + c.rule + '] ' + show(c.before) + ' → ' + show(c.after));
     });
     if (changes.length > 80) log('  …ほか ' + (changes.length - 80) + ' 件');
-    finds.forEach(function (f) { log('  段落' + (f.para + 1) + ' [08 チェックのみ] ' + f.text + '(自動では直しません)'); });
+    finds.forEach(function (f) { log('  段落' + (f.para + 1) + ' [' + f.rule + ' チェックのみ] ' + f.text + (f.note || '(自動では直しません)')); });
   }
 
   // ---- STEP 1: チェック ----
@@ -113,8 +120,9 @@
         var d = await readDocument(ctx);
         if (!d.aligned) log('注意: ' + explainMisalign(d) + '\n「自動修正」は実行できません。\n');
         else if (d.skipped.length) log('(空の段落の差を読み飛ばしました: ' + d.skipped.join(', ') + ')');
-        var finds = NotationEngine.findAll(d.model);
-        var changes = NotationEngine.fixAll(d.model);
+        var cm = d.aligned ? d.model : d.raw;   // 照合が止まったときも、チェックは解析した全段落で行う
+        var finds = NotationEngine.findAll(cm);
+        var changes = NotationEngine.fixAll(cm);
         status('チェック完了: 直す場所 ' + changes.length + ' 件 / 確認だけ ' + finds.length + ' 件');
         log('【直す場所の内訳】\n' + summarize(changes) + '\n\n【一覧】');
         listChanges(changes, finds);
@@ -358,7 +366,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.3');
+    log('アドイン v0.3.1');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');

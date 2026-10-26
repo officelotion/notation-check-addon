@@ -157,6 +157,43 @@
   function findParagraph(p) {
     var out = [], text = joined(p), re = /(?:[℡☎]|【電】)内線/g, m;
     while ((m = re.exec(text)) !== null) out.push({ rule: '08', text: m[0], index: m.index });
+    return out.concat(findPlainLabels(p));
+  }
+
+
+  // ---- 書式のない凡例の候補(チェックのみ。置換はしない) ----
+  // 「時＋日付」を起点に、そのあとの 場→師→費→定→保→持→申→問 を、順番どおりに探す。2つ以上そろったときだけ候補にする
+  var PLAIN_STEPS = [
+    { l: '場', re: /場(?=[^0-9０-９\s、。】])/g, weak: true, prev: /[分）)午時日正曜回まで]/ },
+    { l: '師', re: /師(?=[^\s、。】])/g, weak: true },
+    { l: '費', re: /費(?=[0-9０-９]|無料|不要)/g },
+    { l: '定', re: /定(?=[0-9０-９]+(?:人|名|組|家族|チーム|団体|世帯))/g },
+    { l: '保', re: /保(?=[0-9０-９]+人|あり|なし|無|有)/g },
+    { l: '持', re: /持(?=[^\s、。】])/g, weak: true },
+    { l: '申', re: /申(?=[0-9０-９]+月|電話|電子|郵送|窓口|直接|はがき|ハガキ|メール|FAX|ＦＡＸ|ホームページ|往復|当日|不要|要|ご)/g },
+    { l: '問', re: /問(?=[^\s、。】]{2,40}?(?:【電】|☎|℡|[0-9０-９]{2,4}[-－ー（(][0-9０-９]|電話))/g }
+  ];
+  function ctxOf(t, i, len) { return (t.slice(Math.max(0, i - 6), i) + '[' + t.slice(i, i + len) + ']' + t.slice(i + len, i + len + 6)).replace(/\n/g, '↵'); }
+  function findPlainLabels(p) {
+    var t = joined(p), out = [], re = /時(?=[0-9０-９]{1,2}月)/g, m, a = -1;
+    while ((m = re.exec(t)) !== null) { if (t[m.index - 1] !== '【') { a = m.index; break; } }
+    if (a < 0) return out;
+    var hits = [{ l: '時', i: a, weak: false }], pos = a;
+    PLAIN_STEPS.forEach(function (s) {
+      var r = new RegExp(s.re.source, 'g'), mm;
+      r.lastIndex = pos + 1;
+      while ((mm = r.exec(t)) !== null) {
+        if (s.prev && !s.prev.test(t[mm.index - 1] || '')) continue;
+        hits.push({ l: s.l, i: mm.index, weak: !!s.weak }); pos = mm.index; break;
+      }
+    });
+    // 「F」のあとに電話番号
+    var rf = /(?<![A-Za-z])F(?=[0-9０-９]{2,4}[-－ー（(])/g, mf;
+    while ((mf = rf.exec(t)) !== null) hits.push({ l: 'FAX', i: mf.index, weak: false, f: true });
+    if (hits.filter(function (h) { return !h.f; }).length < 2) return out;   // 起点以外に1つもなければ候補にしない
+    hits.forEach(function (h) {
+      out.push({ rule: '凡例1b候補', text: ctxOf(t, h.i, h.f ? 1 : 1) + ' → 【' + h.l + '】' + (h.weak ? '(要確認)' : ''), index: h.i, label: h.l, weak: h.weak, note: '(置換しません。見分け方の確認用)' });
+    });
     return out;
   }
 
@@ -201,7 +238,7 @@
 
   return {
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
-    fixAll: fixAll, findAll: findAll, findParagraph: findParagraph,
+    fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
     collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };
