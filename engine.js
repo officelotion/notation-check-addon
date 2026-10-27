@@ -144,6 +144,19 @@
     log('凡例(電)', editPara(p, /[℡☎]/g, function () { return '【電】'; }));
     // 2b) 凡例1b: 書式のない行頭の「問」(あとに内線・電話・コロンが続くとき) → 【問】
     log('凡例1b(問)', editPara(p, /^問(?![題い])(?=[：:]|[^\s、。】]{1,40}?(?:内線|【電】|電話|[0-9０-９]{2,4}[-－ー（(][0-9０-９]))/g, function () { return '【問】'; }));
+    // 2b2) 凡例1b: 書式のない凡例(時+日付を起点に、場→師→費→定→保→持→申→問の順) → 【●】、「F＋電話番号」→【FAX】
+    var plain = findPlainLabels(p);
+    if (plain.length) {
+      var ptext = joined(p), pedits = plain.map(function (h) {
+        var b = ptext.charAt(h.index), t = '【' + h.label + '】';
+        return { s: h.index, e: h.index + 1, t: t, before: b, occ: countBefore(ptext, b, h.index) };
+      }).sort(function (a, b) { return a.s - b.s; });
+      for (var k = pedits.length - 1; k >= 0; k--) {
+        applyEdit(p, pedits[k]);
+        pieceEdit(p, pedits[k].s, pedits[k].e, pedits[k].t, false);
+      }
+      pedits.forEach(function (e) { changes.push({ rule: '凡例1b', before: e.before, after: e.t, occ: e.occ }); });
+    }
     // 3) M01 全角数字 → 半角数字
     log('M01', editPara(p, /[０-９]+/g, function (m) { return toHalfDigits(m[0]); }));
     // 4) M03 半角カッコ → 全角カッコ
@@ -163,21 +176,21 @@
   function findParagraph(p) {
     var out = [], text = joined(p), re = /(?:[℡☎]|【電】)内線/g, m;
     while ((m = re.exec(text)) !== null) out.push({ rule: '08', text: m[0], index: m.index });
-    return out.concat(findPlainLabels(p));
+    return out;
   }
 
 
   // ---- 書式のない凡例の候補(チェックのみ。置換はしない) ----
   // 「時＋日付」を起点に、そのあとの 場→師→費→定→保→持→申→問 を、順番どおりに探す。2つ以上そろったときだけ候補にする
   var PLAIN_STEPS = [
-    { l: '場', re: /場(?=[^0-9０-９\s、。】])/g, weak: true, prev: /[分）)午時日正曜回まで]/ },
+    { l: '場', re: /場(?=[^0-9０-９\s、。】])/g, weak: true, prev: /[分）)午時日正曜回まで頃半前後]/ },
     { l: '師', re: /師(?=[^\s、。】])/g, weak: true },
     { l: '費', re: /費(?=[0-9０-９]|無料|不要)/g },
     { l: '定', re: /定(?=[0-9０-９]+(?:人|名|組|家族|チーム|団体|世帯))/g },
     { l: '保', re: /保(?=[0-9０-９]+人|あり|なし|無|有)/g },
     { l: '持', re: /持(?=[^\s、。】])/g, weak: true },
     { l: '申', re: /申(?=[0-9０-９]+月|電話|電子|郵送|窓口|直接|はがき|ハガキ|メール|FAX|ＦＡＸ|ホームページ|往復|当日|不要|要|ご)/g },
-    { l: '問', re: /問(?=[^\s、。】]{2,40}?(?:【電】|☎|℡|[0-9０-９]{2,4}[-－ー（(][0-9０-９]|電話))/g }
+    { l: '問', re: /問(?=[^\s、。】]{2,40}?(?:【電】|☎|℡|内線|[0-9０-９]{2,4}[-－ー（(][0-9０-９]|電話))/g }
   ];
   function ctxOf(t, i, len) { return (t.slice(Math.max(0, i - 6), i) + '[' + t.slice(i, i + len) + ']' + t.slice(i + len, i + len + 6)).replace(/\n/g, '↵'); }
   function findPlainLabels(p) {
@@ -194,13 +207,46 @@
       }
     });
     // 「F」のあとに電話番号
-    var rf = /(?<![A-Za-z])F(?=[0-9０-９]{2,4}[-－ー（(])/g, mf;
+    var rf = /(?<![A-Za-zＡ-Ｚａ-ｚ])[FＦ](?=[0-9０-９]{2,4}[-－ー（(])/g, mf;
     while ((mf = rf.exec(t)) !== null) hits.push({ l: 'FAX', i: mf.index, weak: false, f: true });
     if (hits.filter(function (h) { return !h.f; }).length < 2) return out;   // 起点以外に1つもなければ候補にしない
     hits.forEach(function (h) {
       out.push({ rule: '凡例1b候補', text: ctxOf(t, h.i, h.f ? 1 : 1) + ' → 【' + h.l + '】' + (h.weak ? '(要確認)' : ''), index: h.i, label: h.l, weak: h.weak, note: '(置換しません。見分け方の確認用)' });
     });
     return out;
+  }
+
+  // ---- Ω: 小見出し(最初の行)のあとに、Ωだけの段落を入れる ----
+  // 文書全体の処理。戻り値: null(何もしない) / {kind:'insert', before:n, heading:h}(n番目の段落の前に新しい段落) / {kind:'fill', para:n, heading:h}(空の段落nをΩにする)
+  function planOmega(paras) {
+    function t(p) { return joined(p).replace(/[\s\u3000\v]+/g, ''); }
+    var h = -1, i;
+    for (i = 0; i < paras.length; i++) if (t(paras[i])) { h = i; break; }
+    if (h < 0) return null;
+    if (/第[0-9０-９]+回/.test(t(paras[h]))) {   // 連載タイトルは残して、次の行を小見出しとする
+      var h2 = -1;
+      for (i = h + 1; i < paras.length; i++) if (t(paras[i])) { h2 = i; break; }
+      if (h2 < 0) return null;
+      h = h2;
+    }
+    if (t(paras[h]) === 'Ω') return null;
+    var n = h + 1;
+    if (n >= paras.length) return null;
+    if (t(paras[n]) === 'Ω') return null;
+    if (!t(paras[n])) {
+      var m = n + 1; while (m < paras.length && !t(paras[m])) m++;
+      if (m >= paras.length) return null;       // 本文がない
+      if (t(paras[m]) === 'Ω') return null;     // 空行のあとにΩがすでにある
+      return { kind: 'fill', para: n, heading: h };
+    }
+    return { kind: 'insert', before: n, heading: h };
+  }
+  // 予定の段落の文字の並び(expected)に、Ωを反映する
+  function applyOmegaToTexts(texts, plan) {
+    var a = texts.slice();
+    if (!plan) return a;
+    if (plan.kind === 'fill') a[plan.para] = 'Ω'; else a.splice(plan.before, 0, 'Ω');
+    return a;
   }
 
   function fixAll(paras) {
@@ -258,6 +304,7 @@
   return {
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
     fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
+    planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
     collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };

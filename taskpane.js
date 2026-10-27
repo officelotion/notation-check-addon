@@ -154,9 +154,11 @@
         var cm = d.aligned ? d.model : d.raw;   // 照合が止まったときも、チェックは解析した全段落で行う
         var finds = NotationEngine.findAll(cm);
         var changes = NotationEngine.fixAll(cm);
-        status('チェック完了: 直す場所 ' + changes.length + ' 件 / 確認だけ ' + finds.length + ' 件');
+        var om = NotationEngine.planOmega(cm);
+        status('チェック完了: 直す場所 ' + (changes.length + (om ? 1 : 0)) + ' 件 / 確認だけ ' + finds.length + ' 件');
         log('【直す場所の内訳】\n' + summarize(changes) + '\n\n【一覧】');
         listChanges(changes, finds);
+        if (om) log('  [Ω] 小見出し(段落' + (om.heading + 1) + ')のあとに、Ωだけの段落を' + (om.kind === 'fill' ? '空行から作ります' : '入れます'));
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e)); }
     busy(false);
@@ -259,7 +261,9 @@
         var changes = NotationEngine.fixAll(d.model);
         var edits = NotationEngine.collectEdits(d.model);
         var expected = d.model.map(NotationEngine.joined);
-        if (!edits.length) { status('直す場所はありませんでした'); return; }
+        var omega = NotationEngine.planOmega(d.model);
+        expected = NotationEngine.applyOmegaToTexts(expected, omega);
+        if (!edits.length && !omega) { status('直す場所はありませんでした'); return; }
 
         ctx.document.load('changeTrackingMode');
         await ctx.sync();
@@ -268,6 +272,17 @@
         await ctx.sync();
         modeChanged = true;
         try { localStorage.setItem(LS_KEY, String(Date.now())); } catch (e) { /* 保存できなくても続ける */ }
+
+        // Ω: 小見出しのあとに、Ωだけの段落を入れる(空行があれば、Ωにする)。ほかの変更より先に行う
+        if (omega) {
+          try {
+            if (omega.kind === 'fill') d.wordParas[omega.para].insertText('Ω', 'Start');
+            else d.wordParas[omega.before].insertParagraph('Ω', 'Before');
+            await ctx.sync();
+            okN++;
+            log('  Ω: 小見出し(段落' + (omega.heading + 1) + ')のあとに、Ωだけの段落を' + (omega.kind === 'fill' ? '空行から作りました' : '入れました'));
+          } catch (err) { ngN++; log('  × Ω の段落を入れられません: ' + errText(err)); }
+        }
 
         var byPara = {}, order = [];
         edits.forEach(function (e) { if (!byPara[e.para]) { byPara[e.para] = []; order.push(e.para); } byPara[e.para].push(e); });
