@@ -121,10 +121,13 @@
   function toHalfDigits(s) { return s.replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); }); }
 
   /* 自動修正 (1段落)  戻り値: 変更の一覧(ルールごとの記録) */
-  function fixParagraph(p) {
+  function fixParagraph(p, opts) {
     var changes = [];
     initPieces(p);
     function log(rule, edits) { edits.forEach(function (e) { changes.push({ rule: rule, before: e.before, after: e.t, occ: e.occ }); }); }
+
+    // 0) 空白1: 本文先頭の全角スペースを削除(小見出しは対象外。fixAllが opts.stripLead を渡す)
+    if (opts && opts.stripLead) log('空白1', editPara(p, /^\u3000+(?=[^\u3000\s])/g, function () { return ''; }));
 
     // 1) 凡例: 枠・網かけつきの1文字 → 【●】(書式は外す)
     var pos = 0, shift = 0, snapshot = joined(p);
@@ -142,6 +145,9 @@
     });
     // 2) 凡例: 書式なしの ℡ ☎ → 【電】
     log('凡例(電)', editPara(p, /[℡☎]/g, function () { return '【電】'; }));
+    // 2a) 凡例1c: 半角の角カッコ [時] → 【時】、行頭のコロン形式 時： → 【時】(コロンも消す)
+    log('凡例1c([ ])', editPara(p, /[\[［]([対時場師費定保持申問電])[\]］]/g, function (m) { return '【' + m[1] + '】'; }));
+    log('凡例1c(コロン)', editPara(p, /(?:^|(?<=\v))([対時場師費定保持申問])[：:]/g, function (m) { return '【' + m[1] + '】'; }));
     // 2b) 凡例1b: 書式のない行頭の「問」(あとに内線・電話・コロンが続くとき) → 【問】
     log('凡例1b(問)', editPara(p, /^問(?![題い])(?=[：:]|[^\s、。】]{1,40}?(?:内線|【電】|電話|[0-9０-９]{2,4}[-－ー（(][0-9０-９]))/g, function () { return '【問】'; }));
     // 2b2) 凡例1b: 書式のない凡例(時+日付を起点に、場→師→費→定→保→持→申→問の順) → 【●】、「F＋電話番号」→【FAX】
@@ -218,17 +224,22 @@
 
   // ---- Ω: 小見出し(最初の行)のあとに、Ωだけの段落を入れる ----
   // 文書全体の処理。戻り値: null(何もしない) / {kind:'insert', before:n, heading:h}(n番目の段落の前に新しい段落) / {kind:'fill', para:n, heading:h}(空の段落nをΩにする)
-  function planOmega(paras) {
-    function t(p) { return joined(p).replace(/[\s\u3000\v]+/g, ''); }
+  function tOf(p) { return joined(p).replace(/[\s\u3000\v]+/g, ''); }
+  function headingIndex(paras) {   // 小見出し=最初の行(連載タイトルなら、その次の行)。なければ -1
     var h = -1, i;
-    for (i = 0; i < paras.length; i++) if (t(paras[i])) { h = i; break; }
-    if (h < 0) return null;
-    if (/第[0-9０-９]+回/.test(t(paras[h]))) {   // 連載タイトルは残して、次の行を小見出しとする
+    for (i = 0; i < paras.length; i++) if (tOf(paras[i])) { h = i; break; }
+    if (h < 0) return -1;
+    if (/第[0-9０-９]+回/.test(tOf(paras[h]))) {
       var h2 = -1;
-      for (i = h + 1; i < paras.length; i++) if (t(paras[i])) { h2 = i; break; }
-      if (h2 < 0) return null;
-      h = h2;
+      for (i = h + 1; i < paras.length; i++) if (tOf(paras[i])) { h2 = i; break; }
+      return h2;
     }
+    return h;
+  }
+  function planOmega(paras) {
+    function t(p) { return tOf(p); }
+    var h = headingIndex(paras), i;
+    if (h < 0) return null;
     if (t(paras[h]) === 'Ω') return null;
     var n = h + 1;
     if (n >= paras.length) return null;
@@ -251,7 +262,8 @@
 
   function fixAll(paras) {
     var all = [];
-    paras.forEach(function (p, i) { fixParagraph(p).forEach(function (c) { c.para = i; all.push(c); }); });
+    var hd = headingIndex(paras);
+    paras.forEach(function (p, i) { fixParagraph(p, { stripLead: hd >= 0 && i > hd }).forEach(function (c) { c.para = i; all.push(c); }); });
     return all;
   }
   function findAll(paras) {

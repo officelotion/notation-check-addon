@@ -187,7 +187,7 @@
     return r;
   }
 
-  var LABEL_RE = /^【.{1,4}】$/;
+  var LABEL_RE = /^(?:【.{1,4}】|[（）])$/;   // 凡例の【●】と、枠が間違ってはみ出した（ ）
   // 枠・網かけが残っている【●】を探す(段落の番号と、同じ文字列の何番目か)
   function boxedLabelRuns(model) {
     var out = [];
