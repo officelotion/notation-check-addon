@@ -347,7 +347,12 @@
         var exp = expected.map(norm).filter(function (t) { return t; });
         var bad = [];
         if (act.length !== exp.length) bad.push('段落の数が変わりました(' + exp.length + ' → ' + act.length + ')');
-        else act.forEach(function (t, i) { if (t !== exp[i]) bad.push('段落' + (i + 1) + '(空を除く) 予定=' + show(short(exp[i])) + ' / 実際=' + show(short(t))); });
+        else act.forEach(function (t, i) {
+          var ta = normA(t), ea = normA(exp[i]);
+          if (ta === ea) return;
+          var d = firstDiff(ea, ta), a0 = Math.max(0, d - 8);
+          bad.push('段落' + (i + 1) + '(空を除く) 差は' + (d + 1) + '文字目付近 予定=' + show(ea.slice(a0, d + 12)) + ' / 実際=' + show(ta.slice(a0, d + 12)) + ' (予定' + cp(ea[d]) + ' / 実際' + cp(ta[d]) + ' ・文字数 ' + ea.length + ' / ' + ta.length + ')');
+        });
 
         status('置換完了: ' + okN + ' 箇所' + (ngN ? ' / 失敗 ' + ngN + ' 箇所' : '') + (bad.length ? ' / 確認で不一致 ' + bad.length : ' / 確認OK'));
         log('\n変更履歴つきで直しました。「校閲」タブの変更履歴で確認できます。');
