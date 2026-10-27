@@ -61,6 +61,10 @@
     var t = joined(p);
     p.orig = t;
     p.pieces = [{ text: t, os: 0, oe: t.length, edited: false, box: false }];
+    // 「記号(絵文字)」のように、Wordの中で特別な形(symEx)になっている文字の位置。Wordの検索では見つけられない
+    p.opaque = {};
+    var pos0 = 0;
+    p.runs.forEach(function (r) { if (r.sym) r.sym.forEach(function (o) { p.opaque[pos0 + o] = true; }); pos0 += r.text.length; });
   }
   function pieceEdit(p, s, e, t, box) {
     var before = [], after = [], mid = [], pre = '', post = '', pos = 0;
@@ -219,8 +223,21 @@
         var before = p.orig.slice(pc.os, pc.oe);
         if (before === pc.text && !pc.box) return;
         var occ = countBefore(p.orig, before, pc.os);
-        out.push({ para: i, os: pc.os, oe: pc.oe, before: before, after: pc.text, box: pc.box,
-                   occ: occ, ambiguous: nthIndex(p.orig, before, occ) !== pc.os });
+        var ed = { para: i, os: pc.os, oe: pc.oe, before: before, after: pc.text, box: pc.box,
+                   occ: occ, ambiguous: nthIndex(p.orig, before, occ) !== pc.os };
+        // 特別な文字(symEx)を含む変更は、前後の普通の文字を目印にして、その間を置き換える
+        var op = p.opaque || {}, hasOp = false, allOp = true;
+        for (var q = pc.os; q < pc.oe; q++) { if (op[q]) hasOp = true; else allOp = false; }
+        if (hasOp) {
+          var b = '', k2 = pc.os - 1, a = '', k3 = pc.oe;
+          while (k2 >= 0 && !op[k2] && b.length < 10 && !/[\u0000-\u001f]/.test(p.orig[k2])) { b = p.orig[k2] + b; k2--; }
+          while (k3 < p.orig.length && !op[k3] && a.length < 10 && !/[\u0000-\u001f]/.test(p.orig[k3])) { a += p.orig[k3]; k3++; }
+          ed.opaque = true; ed.unsupported = !allOp; ed.ctxB = b; ed.ctxA = a;
+          ed.ctxBocc = b ? countBefore(p.orig, b, pc.os - b.length) : 0;
+          ed.ctxAocc = a ? countBefore(p.orig, a, pc.oe) : 0;
+          ed.ambiguous = !!((b && nthIndex(p.orig, b, ed.ctxBocc) !== pc.os - b.length) || (a && nthIndex(p.orig, a, ed.ctxAocc) !== pc.oe));
+        }
+        out.push(ed);
       });
     });
     return out;

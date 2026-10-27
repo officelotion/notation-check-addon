@@ -1,4 +1,4 @@
-/* 表記チェック Word版 ― アドインの画面とWordの接続 (taskpane.js)  v0.3.1(テスト版) */
+/* 表記チェック Word版 ― アドインの画面とWordの接続 (taskpane.js)  v0.3.2(テスト版) */
 /* global Office, Word, NotationEngine */
 (function () {
   'use strict';
@@ -14,6 +14,28 @@
   function show(s) { return '「' + String(s).replace(/\v/g, '↵') + '」'; }
   // 照合用: 見えない文字(異体字セレクタ・幅なし文字など)を除き、全角半角の違いをそろえる
   function normA(s) { return String(s || '').replace(/[\u0000-\u001f\u007f\ufe00-\ufe0f\u200b-\u200d\u2060\ufeff\u00ad]/g, '').replace(/\u00a0/g, ' ').normalize('NFKC'); }
+  var WILD = '\uE000';
+  function markedText(p) { // 特別な文字(symEx)の位置を、ワイルドカードにした解析側の文字列
+    var out = '';
+    p.runs.forEach(function (r) {
+      for (var i = 0; i < r.text.length; i++) out += (r.sym && r.sym.indexOf(i) >= 0) ? WILD : r.text[i];
+    });
+    return out;
+  }
+  function wildEq(a, b) { // a の WILD は、b の0文字または1文字に一致してよい
+    if (a.indexOf(WILD) < 0) return a === b;
+    var cur = { 0: true };
+    for (var i = 0; i < a.length; i++) {
+      var next = {};
+      Object.keys(cur).forEach(function (js) {
+        var j = +js;
+        if (a[i] === WILD) { next[j] = true; if (j < b.length) next[j + 1] = true; }
+        else if (j < b.length && a[i] === b[j]) next[j + 1] = true;
+      });
+      cur = next;
+    }
+    return !!cur[b.length];
+  }
   function cp(c) { return c === undefined ? '(なし)' : 'U+' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'); }
   function firstDiff(a, b) { var n = Math.min(a.length, b.length), i = 0; while (i < n && a[i] === b[i]) i++; return i; }
   function norm(s) { return String(s || '').replace(/[\u0000-\u001f\u007f]/g, ''); }
@@ -29,8 +51,16 @@
     var SKIP = { Fallback: 1, txbxContent: 1, sectPr: 1, pPr: 1, drawing: 1, pict: 1, AlternateContent: 1 };
 
     function attr(el, name) { return el.getAttributeNS(W_NS, name) || el.getAttribute('w:' + name) || ''; }
+    function symChar(ac) { // mc:AlternateContent の中の w16se:symEx(例: ☎ の絵文字)
+      var se = ac.getElementsByTagNameNS('*', 'symEx')[0];
+      if (!se) return '';
+      var hex = '';
+      for (var k = 0; k < se.attributes.length; k++) { if (se.attributes[k].localName === 'char') hex = se.attributes[k].value; }
+      var cpv = parseInt(hex, 16);
+      return cpv ? String.fromCodePoint(cpv) : '';
+    }
     function runOf(r) {
-      var text = '', bdr = null, shd = null;
+      var text = '', bdr = null, shd = null, sym = [];
       for (var c = r.firstChild; c; c = c.nextSibling) {
         if (c.nodeType !== 1) continue;
         var n = c.localName;
@@ -43,8 +73,9 @@
         } else if (n === 't') text += c.textContent;
         else if (n === 'tab') text += '\t';
         else if (n === 'br' || n === 'cr') text += '\v';
+        else if (n === 'AlternateContent') { var sc = symChar(c); if (sc) { sym.push(text.length); text += sc; } }
       }
-      return { text: text, boxed: NotationEngine.isBoxedProps(bdr, shd) };
+      return { text: text, boxed: NotationEngine.isBoxedProps(bdr, shd), sym: sym.length ? sym : null };
     }
     function collect(el, p) {
       for (var c = el.firstChild; c; c = c.nextSibling) {
@@ -79,9 +110,9 @@
     var L = await loadModel(ctx), model = L.model, wp = L.wp;
     var m2 = [], w2 = [], skipped = [], bad = null, i = 0, j = 0;
     while (i < model.length || j < wp.length) {
-      var mt = i < model.length ? normA(NotationEngine.joined(model[i])) : null;
+      var mt = i < model.length ? normA(markedText(model[i])) : null;
       var wt = j < wp.length ? normA(wp[j].text) : null;
-      if (mt !== null && wt !== null && mt === wt) { m2.push(model[i]); w2.push(wp[j]); i++; j++; }
+      if (mt !== null && wt !== null && wildEq(mt, wt)) { m2.push(model[i]); w2.push(wp[j]); i++; j++; }
       else if (mt === '') { skipped.push('解析' + (i + 1) + '番目(空)'); i++; }
       else if (wt === '') { skipped.push('Word' + (j + 1) + '番目(空)'); j++; }
       else { bad = { i: i, j: j, mt: mt, wt: wt }; break; }
@@ -245,6 +276,14 @@
           var pi = order[oi], list = byPara[pi], para = d.wordParas[pi];
           // ① 探す(変更前)
           var searches = list.map(function (e) {
+            if (e.opaque) { // 特別な文字: 前後の普通の文字を探す
+              if (e.ambiguous || e.unsupported) return null;
+              var sb = e.ctxB ? para.search(e.ctxB, { matchCase: true }) : null;
+              var sa = e.ctxA ? para.search(e.ctxA, { matchCase: true }) : null;
+              if (sb) sb.load('items/text');
+              if (sa) sa.load('items/text');
+              return { opq: true, b: sb, a: sa };
+            }
             if (e.ambiguous || e.before.length > 250 || /[\u0000-\u001f]/.test(e.before)) return null;
             var rs = para.search(e.before, { matchCase: true });
             rs.load('items/text');
@@ -252,10 +291,25 @@
           });
           await ctx.sync();
           var targets = list.map(function (e, i) {
-            if (!searches[i]) return null;
-            var cands = searches[i].items.filter(function (r) { return r.text === e.before; });
+            var sr = searches[i];
+            if (!sr) return null;
+            if (sr.opq) {
+              var rB = sr.b ? sr.b.items.filter(function (r) { return r.text === e.ctxB; })[e.ctxBocc] : null;
+              var rA = sr.a ? sr.a.items.filter(function (r) { return r.text === e.ctxA; })[e.ctxAocc] : null;
+              if ((e.ctxB && !rB) || (e.ctxA && !rA)) return null;
+              var st = rB ? rB.getRange('End') : para.getRange('Content').getRange('Start');
+              var en = rA ? rA.getRange('Start') : para.getRange('Content').getRange('End');
+              var between = st.expandTo(en);
+              between.load('text');
+              return { between: between, opq: true };
+            }
+            var cands = sr.items.filter(function (r) { return r.text === e.before; });
             return cands[e.occ] || null;
           });
+          if (targets.some(function (t) { return t && t.opq; })) {
+            await ctx.sync();   // 間の文字数を確かめる(大きく食い違うときは、触らない)
+            targets = targets.map(function (t) { return (t && t.opq) ? (t.between.text.length <= 3 ? t.between : null) : t; });
+          }
           // ② 後ろから変える
           var idx = list.map(function (e, i) { return i; }).sort(function (a, b) { return list[b].os - list[a].os; });
           for (var k = 0; k < idx.length; k++) {
@@ -366,7 +420,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.3.1');
+    log('アドイン v0.3.2');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
