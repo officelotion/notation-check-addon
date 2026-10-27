@@ -60,7 +60,7 @@
       return cpv ? String.fromCodePoint(cpv) : '';
     }
     function runOf(r) {
-      var text = '', bdr = null, shd = null, sym = [];
+      var text = '', bdr = null, shd = null, hl = '', sym = [];
       for (var c = r.firstChild; c; c = c.nextSibling) {
         if (c.nodeType !== 1) continue;
         var n = c.localName;
@@ -69,13 +69,14 @@
             if (q.nodeType !== 1) continue;
             if (q.localName === 'bdr') bdr = { val: attr(q, 'val') };
             else if (q.localName === 'shd') shd = { val: attr(q, 'val'), fill: attr(q, 'fill') };
+            else if (q.localName === 'highlight') hl = attr(q, 'val');
           }
         } else if (n === 't') text += c.textContent;
         else if (n === 'tab') text += '\t';
         else if (n === 'br' || n === 'cr') text += '\v';
         else if (n === 'AlternateContent') { var sc = symChar(c); if (sc) { sym.push(text.length); text += sc; } }
       }
-      return { text: text, boxed: NotationEngine.isBoxedProps(bdr, shd), sym: sym.length ? sym : null };
+      return { text: text, boxed: NotationEngine.isBoxedProps(bdr, shd, hl), sym: sym.length ? sym : null };
     }
     function collect(el, p) {
       for (var c = el.firstChild; c; c = c.nextSibling) {
@@ -158,6 +159,9 @@
         status('チェック完了: 直す場所 ' + (changes.length + (om ? 1 : 0)) + ' 件 / 確認だけ ' + finds.length + ' 件');
         log('【直す場所の内訳】\n' + summarize(changes) + '\n\n【一覧】');
         listChanges(changes, finds);
+        NotationEngine.planBodyBreak(cm).forEach(function (pl) {
+          log('  段落' + (pl.para + 1) + ' [本文2] ' + (pl.end ? '最後に「。」を付けます' : '凡例の前に、' + (pl.addPeriod ? '「。」と' : '') + '改行(段落区切り)を入れます'));
+        });
         if (om) log('  [Ω] 小見出し(段落' + (om.heading + 1) + ')のあとに、Ωだけの段落を' + (om.kind === 'fill' ? '空行から作ります' : '入れます'));
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e)); }
@@ -213,7 +217,7 @@
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' +
       '</pkg:xmlData></pkg:part>' +
       '<pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"><pkg:xmlData>' +
-      '<w:document xmlns:w="' + W_NS + '"><w:body><w:p><w:r><w:rPr><w:bdr w:val="nil"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/></w:rPr>' +
+      '<w:document xmlns:w="' + W_NS + '"><w:body><w:p><w:r><w:rPr><w:highlight w:val="none"/><w:bdr w:val="nil"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/></w:rPr>' +
       '<w:t xml:space="preserve">' + esc + '</w:t></w:r></w:p></w:body></w:document></pkg:xmlData></pkg:part></pkg:package>';
   }
   // 残った枠・網かけを、OOXMLで入れ直して外す。戻り値: {found, done, ng}
@@ -262,8 +266,10 @@
         var edits = NotationEngine.collectEdits(d.model);
         var expected = d.model.map(NotationEngine.joined);
         var omega = NotationEngine.planOmega(d.model);
+        var bplan = NotationEngine.planBodyBreak(d.model);
+        expected = NotationEngine.applyBreakToTexts(expected, bplan);
         expected = NotationEngine.applyOmegaToTexts(expected, omega);
-        if (!edits.length && !omega) { status('直す場所はありませんでした'); return; }
+        if (!edits.length && !omega && !bplan.length) { status('直す場所はありませんでした'); return; }
 
         ctx.document.load('changeTrackingMode');
         await ctx.sync();
@@ -355,6 +361,28 @@
         var Lb = await loadModel(ctx);
         boxLeft0 = boxedLabelRuns(Lb.model).length;
         if (boxLeft0) boxFix = await fixRemainingBoxes(ctx);
+
+        // ②c 本文2: 凡例の前に「。」と段落区切り(Enter)を入れる。段落の数が変わるので、最後に行う
+        if (bplan.length) {
+          var Lx = await loadModel(ctx);
+          var bp = NotationEngine.planBodyBreak(Lx.model);
+          var mI = nonEmptyIdx(Lx.model, NotationEngine.joined), wI = nonEmptyIdx(Lx.wp, function (p) { return p.text; });
+          bp.sort(function (x, y) { return y.para - x.para; });
+          for (var bi = 0; bi < bp.length; bi++) {
+            var pl = bp[bi], rank = mI.indexOf(pl.para), wpar = (rank >= 0 && wI[rank] !== undefined) ? Lx.wp[wI[rank]] : null;
+            if (!wpar) { ngN++; log('  × 本文2: 段落' + (pl.para + 1) + ' の場所を特定できません'); continue; }
+            try {
+              if (pl.end) { wpar.insertText('。', 'End'); await ctx.sync(); }
+              else {
+                var rs = wpar.search(pl.label, { matchCase: true }); rs.load('items'); await ctx.sync();
+                if (!rs.items.length) throw new Error('凡例の位置が見つかりません');
+                rs.items[0].insertText((pl.addPeriod ? '。' : '') + '\n', 'Start'); await ctx.sync();
+              }
+              okN++;
+              log('  本文2: 段落' + (pl.para + 1) + (pl.end ? ' の最後に「。」を付けました' : ' の凡例の前に、' + (pl.addPeriod ? '「。」と' : '') + '改行を入れました'));
+            } catch (err) { ngN++; log('  × 本文2: 段落' + (pl.para + 1) + ' の変更に失敗: ' + errText(err)); }
+          }
+        }
 
         // ③ 確かめる(空でない段落の並びを、予定と比べる)
         var L2 = await loadModel(ctx);

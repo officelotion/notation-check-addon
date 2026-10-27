@@ -45,7 +45,8 @@
 
   // 枠・網かけが「見える」ものだけを、凡例の目印にする
   //  bdr = {val} または null / shd = {val, fill} または null
-  function isBoxedProps(bdr, shd) {
+  function isBoxedProps(bdr, shd, hl) {
+    if (hl && /^(lightGray|darkGray)$/i.test(hl)) return true;   // 蛍光ペンのグレー
     if (bdr && !/^(nil|none)$/i.test(bdr.val || '')) return true;
     if (shd) {
       var v = shd.val || '', f = shd.fill || '';
@@ -259,6 +260,40 @@
     if (plan.kind === 'fill') a[plan.para] = 'Ω'; else a.splice(plan.before, 0, 'Ω');
     return a;
   }
+  // ---- 本文2: 凡例の前(本文の最後)に「。」を付けて、段落区切りで改行 ----
+  // 戻り値: [ {para, idx, label, addPeriod} (段落の途中から凡例が始まる: idx の前で段落を分ける) | {para, end:true} (前の段落の末尾に「。」) ]
+  function needPeriod(c) { return !/[\s\u3000。！？!?」』）)］\]、，,.．・：:；;…―—\-】]/.test(c); }
+  function planBodyBreak(paras) {
+    var h = headingIndex(paras), out = [], i;
+    if (h < 0) return out;
+    for (i = h + 1; i < paras.length; i++) {
+      var t = joined(paras[i]), m = /【(?:対|時)】/.exec(t);
+      if (!m || tOf(paras[i]) === 'Ω') continue;
+      if (m.index > 0) {
+        var before = t.slice(0, m.index).replace(/[\s\u3000\v]+$/, '');
+        if (!before) break;
+        out.push({ para: i, idx: m.index, label: m[0], addPeriod: needPeriod(before.charAt(before.length - 1)) });
+      } else {
+        var j = i - 1;
+        if (j > h && tOf(paras[j]) && tOf(paras[j]) !== 'Ω' && !/^【.{1,4}】/.test(joined(paras[j]))) {
+          var pt = joined(paras[j]).replace(/[\s\u3000\v]+$/, '');
+          if (needPeriod(pt.charAt(pt.length - 1))) out.push({ para: j, end: true });
+        }
+      }
+      break;   // 最初の凡例のかたまりだけ
+    }
+    return out;
+  }
+  function applyBreakToTexts(texts, plans) {
+    var a = texts.slice();
+    plans.slice().sort(function (x, y) { return y.para - x.para; }).forEach(function (pl) {
+      if (pl.end) { a[pl.para] = a[pl.para].replace(/[\s\u3000\v]+$/, '') + '。'; return; }
+      var t = a[pl.para];
+      var before = t.slice(0, pl.idx).replace(/[\s\u3000\v]+$/, '');
+      a.splice(pl.para, 1, before + (pl.addPeriod ? '。' : ''), t.slice(pl.idx));
+    });
+    return a;
+  }
 
   function fixAll(paras) {
     var all = [];
@@ -316,7 +351,7 @@
   return {
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
     fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
-    planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
+    planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
     collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };
