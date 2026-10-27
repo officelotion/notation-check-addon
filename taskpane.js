@@ -48,7 +48,7 @@
     var body = dom.getElementsByTagNameNS(W_NS, 'body')[0];
     if (!body) throw new Error('文書の中身(w:body)が見つかりません');
     var paras = [];
-    var SKIP = { Fallback: 1, txbxContent: 1, sectPr: 1, pPr: 1, drawing: 1, pict: 1, AlternateContent: 1 };
+    var SKIP = { del: 1, moveFrom: 1, Fallback: 1, txbxContent: 1, sectPr: 1, pPr: 1, drawing: 1, pict: 1, AlternateContent: 1 };
 
     function attr(el, name) { return el.getAttributeNS(W_NS, name) || el.getAttribute('w:' + name) || ''; }
     function symChar(ac) { // mc:AlternateContent の中の w16se:symEx(例: ☎ の絵文字)
