@@ -162,7 +162,7 @@
         NotationEngine.planBodyBreak(cm).forEach(function (pl) {
           log('  段落' + (pl.para + 1) + ' [本文2] ' + (pl.end ? '最後に「。」を付けます' : '凡例の前に、' + (pl.addPeriod ? '「。」と' : '') + '改行(段落区切り)を入れます'));
         });
-        if (om) log('  [Ω] 小見出し(段落' + (om.heading + 1) + ')のあとに、Ωだけの段落を' + (om.kind === 'fill' ? '空行から作ります' : '入れます'));
+        if (om) log('  [Ω] 小見出し(段落' + (om.heading + 1) + ')' + (om.kind === 'star' ? 'の★のあとで改行して、Ωだけの段落を入れます(★は残します)' : 'のあとに、Ωだけの段落を' + (om.kind === 'fill' ? '空行から作ります' : '入れます')));
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e)); }
     busy(false);
@@ -267,8 +267,8 @@
         var expected = d.model.map(NotationEngine.joined);
         var omega = NotationEngine.planOmega(d.model);
         var bplan = NotationEngine.planBodyBreak(d.model);
-        expected = NotationEngine.applyBreakToTexts(expected, bplan);
-        expected = NotationEngine.applyOmegaToTexts(expected, omega);
+        var star = !!(omega && omega.kind === 'star');
+        expected = NotationEngine.simulateStructure(expected);
         if (!edits.length && !omega && !bplan.length) { status('直す場所はありませんでした'); return; }
 
         ctx.document.load('changeTrackingMode');
@@ -280,7 +280,7 @@
         try { localStorage.setItem(LS_KEY, String(Date.now())); } catch (e) { /* 保存できなくても続ける */ }
 
         // Ω: 小見出しのあとに、Ωだけの段落を入れる(空行があれば、Ωにする)。ほかの変更より先に行う
-        if (omega) {
+        if (omega && !star) {
           try {
             if (omega.kind === 'fill') d.wordParas[omega.para].insertText('Ω', 'Start');
             else d.wordParas[omega.before].insertParagraph('Ω', 'Before');
@@ -363,10 +363,22 @@
         if (boxLeft0) boxFix = await fixRemainingBoxes(ctx);
 
         // ②c 本文2: 凡例の前に「。」と段落区切り(Enter)を入れる。段落の数が変わるので、最後に行う
-        if (bplan.length) {
+        if (bplan.length || star) {
           var Lx = await loadModel(ctx);
-          var bp = NotationEngine.planBodyBreak(Lx.model);
           var mI = nonEmptyIdx(Lx.model, NotationEngine.joined), wI = nonEmptyIdx(Lx.wp, function (p) { return p.text; });
+          if (star) {   // 小見出し★本文 → ★で改行して、Ωだけの段落を入れる(★は残す)
+            try {
+              var hr = mI.indexOf(omega.para), hw = (hr >= 0 && wI[hr] !== undefined) ? Lx.wp[wI[hr]] : null;
+              if (!hw) throw new Error('小見出しの場所を特定できません');
+              var srs = hw.search('★', { matchCase: true }); srs.load('items'); await ctx.sync();
+              if (srs.items.length <= omega.occ) throw new Error('★の位置が見つかりません');
+              srs.items[omega.occ].insertText('\nΩ\n', 'After'); await ctx.sync();
+              okN++; log('  ★: 小見出し(段落' + (omega.heading + 1) + ')の★のあとで改行し、Ωだけの段落を入れました(★は残します)');
+              Lx = await loadModel(ctx);
+              mI = nonEmptyIdx(Lx.model, NotationEngine.joined); wI = nonEmptyIdx(Lx.wp, function (p) { return p.text; });
+            } catch (err) { ngN++; log('  × ★での改行に失敗: ' + errText(err)); }
+          }
+          var bp = NotationEngine.planBodyBreak(Lx.model);
           bp.sort(function (x, y) { return y.para - x.para; });
           for (var bi = 0; bi < bp.length; bi++) {
             var pl = bp[bi], rank = mI.indexOf(pl.para), wpar = (rank >= 0 && wI[rank] !== undefined) ? Lx.wp[wI[rank]] : null;

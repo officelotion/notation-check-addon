@@ -164,6 +164,8 @@
       }
       pedits.forEach(function (e) { changes.push({ rule: '凡例1b', before: e.before, after: e.t, occ: e.occ }); });
     }
+    // 2c) ●2: ●小見出しのあとの文章では、【凡例】の直前の「。」を削除
+    if (/^●/.test(joined(p))) log('●2', editPara(p, /。(?=【[対時場師費定保持申問電]】)/g, function () { return ''; }));
     // 3) M01 全角数字 → 半角数字
     log('M01', editPara(p, /[０-９]+/g, function (m) { return toHalfDigits(m[0]); }));
     // 4) M03 半角カッコ → 全角カッコ
@@ -230,7 +232,8 @@
     var h = -1, i;
     for (i = 0; i < paras.length; i++) if (tOf(paras[i])) { h = i; break; }
     if (h < 0) return -1;
-    if (/第[0-9０-９]+回/.test(tOf(paras[h]))) {
+    var SKIPH = function (p) { var x = tOf(p); return /第[0-9０-９]+回/.test(x) || /^[0-9０-９]{4}[\/／.][0-9０-９]{1,2}[\/／.][0-9０-９]{1,2}号?$/.test(x); };   // 連載タイトル・号数の行
+    if (SKIPH(paras[h])) {
       var h2 = -1;
       for (i = h + 1; i < paras.length; i++) if (tOf(paras[i])) { h2 = i; break; }
       return h2;
@@ -242,6 +245,8 @@
     var h = headingIndex(paras), i;
     if (h < 0) return null;
     if (t(paras[h]) === 'Ω') return null;
+    var ht = joined(paras[h]), sm = /★(?=[^\s\u3000★])/.exec(ht);
+    if (sm) return { kind: 'star', para: h, idx: sm.index + 1, occ: (ht.slice(0, sm.index).match(/★/g) || []).length, heading: h };   // 小見出し★本文 → ★で改行してΩ(★は残す)
     var n = h + 1;
     if (n >= paras.length) return null;
     if (t(paras[n]) === 'Ω') return null;
@@ -257,7 +262,9 @@
   function applyOmegaToTexts(texts, plan) {
     var a = texts.slice();
     if (!plan) return a;
-    if (plan.kind === 'fill') a[plan.para] = 'Ω'; else a.splice(plan.before, 0, 'Ω');
+    if (plan.kind === 'fill') a[plan.para] = 'Ω';
+    else if (plan.kind === 'star') { var st = a[plan.para]; a.splice(plan.para, 1, st.slice(0, plan.idx), 'Ω', st.slice(plan.idx)); }
+    else a.splice(plan.before, 0, 'Ω');
     return a;
   }
   // ---- 本文2: 凡例の前(本文の最後)に「。」を付けて、段落区切りで改行 ----
@@ -275,7 +282,7 @@
         out.push({ para: i, idx: m.index, label: m[0], addPeriod: needPeriod(before.charAt(before.length - 1)) });
       } else {
         var j = i - 1;
-        if (j > h && tOf(paras[j]) && tOf(paras[j]) !== 'Ω' && !/^【.{1,4}】/.test(joined(paras[j]))) {
+        if (j > h && tOf(paras[j]) && tOf(paras[j]) !== 'Ω' && !/^[【●]/.test(joined(paras[j]))) {
           var pt = joined(paras[j]).replace(/[\s\u3000\v]+$/, '');
           if (needPeriod(pt.charAt(pt.length - 1))) out.push({ para: j, end: true });
         }
@@ -293,6 +300,13 @@
       a.splice(pl.para, 1, before + (pl.addPeriod ? '。' : ''), t.slice(pl.idx));
     });
     return a;
+  }
+
+  // 構造の変更(★で改行・Ω・本文2)を、文字の並びの上で順に行った結果(確認用の予定)
+  function simulateStructure(texts) {
+    var mk = function (t) { return { runs: t ? [{ text: t, boxed: false }] : [] }; };
+    var a = applyOmegaToTexts(texts, planOmega(texts.map(mk)));
+    return applyBreakToTexts(a, planBodyBreak(a.map(mk)));
   }
 
   function fixAll(paras) {
@@ -351,7 +365,7 @@
   return {
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
     fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
-    planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
+    simulateStructure: simulateStructure, planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
     collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };
