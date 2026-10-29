@@ -85,10 +85,31 @@
         else if (c.localName !== 'p') collect(c, p);
       }
     }
+    var carry = false;
+    function markDeleted(pEl) {
+      for (var a = pEl.firstChild; a; a = a.nextSibling) {
+        if (a.nodeType === 1 && a.localName === 'pPr') {
+          for (var b = a.firstChild; b; b = b.nextSibling) {
+            if (b.nodeType === 1 && b.localName === 'rPr') {
+              for (var q = b.firstChild; q; q = q.nextSibling) if (q.nodeType === 1 && q.localName === 'del') return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
     function walk(node) {
       for (var c = node.firstChild; c; c = c.nextSibling) {
         if (c.nodeType !== 1 || SKIP[c.localName]) continue;
-        if (c.localName === 'p') { var p = { runs: [] }; paras.push(p); collect(c, p); }
+        if (c.localName === 'p') {
+          var p;
+          if (carry) { p = paras[paras.length - 1]; p.wcount++; } else { p = { runs: [], wcount: 1 }; paras.push(p); }
+          var n0 = p.runs.length;
+          collect(c, p);
+          if (c.getElementsByTagNameNS(W_NS, 'drawing').length || c.getElementsByTagNameNS(W_NS, 'pict').length) p.hasObj = true;
+          // 段落記号が変更履歴で削除されている(=次の段落とつながる)。ただし、段落ぜんたいの削除(中身がない)は、別の段落のまま数える
+          carry = markDeleted(c) && p.runs.length > 0;
+        }
         else walk(c);
       }
     }
@@ -155,13 +176,18 @@
         var cm = d.aligned ? d.model : d.raw;   // 照合が止まったときも、チェックは解析した全段落で行う
         var finds = NotationEngine.findAll(cm);
         var changes = NotationEngine.fixAll(cm);
-        var om = NotationEngine.planOmega(cm);
+        var om = NotationEngine.planStructure(cm).omega;
         status('チェック完了: 直す場所 ' + (changes.length + (om ? 1 : 0)) + ' 件 / 確認だけ ' + finds.length + ' 件');
         log('【直す場所の内訳】\n' + summarize(changes) + '\n\n【一覧】');
         listChanges(changes, finds);
         NotationEngine.planBodyBreak(cm).forEach(function (pl) {
           log('  段落' + (pl.para + 1) + ' [本文2] ' + (pl.end ? '最後に「。」を付けます' : '凡例の前に、' + (pl.addPeriod ? '「。」と' : '') + '改行(段落区切り)を入れます'));
         });
+        var sp2 = NotationEngine.planStructure(cm);
+        if (sp2.lines.length) cm0Log(cm, sp2.lines);
+        if (sp2.empties.length) log('  [空白2] 空行の段落 ' + sp2.empties.length + ' 件を削除します');
+        var mg2 = NotationEngine.planMerge(cm);
+        if (mg2.length) log('  [本文1] 凡例のあとに続く段落(' + mg2.length + ' 件)を、1つの段落につなぎます');
         if (om) log('  [Ω] 小見出し(段落' + (om.heading + 1) + ')' + (om.kind === 'star' ? 'の★のあとで改行して、Ωだけの段落を入れます(★は残します)' : 'のあとに、Ωだけの段落を' + (om.kind === 'fill' ? '空行から作ります' : '入れます')));
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e)); }
@@ -205,6 +231,19 @@
     });
     return out;
   }
+  // 解析した段落 mi に対応する、Wordの段落(つながった段落は、最初のもの)を探す。位置で対応づけ、文字が合わなければ、空でない段落の順で対応づける
+  function subseq(a, b) { var i = 0; for (var j = 0; j < b.length && i < a.length; j++) if (a[i] === b[j]) i++; return i === a.length; }
+  function wordParaOf(L, mi) {
+    var k = 0, i;
+    for (i = 0; i < mi; i++) k += (L.model[i].wcount || 1);
+    var cnt = L.model[mi].wcount || 1, txt = '';
+    for (i = 0; i < cnt && k + i < L.wp.length; i++) txt += L.wp[k + i].text;
+    if (k < L.wp.length && subseq(normA(NotationEngine.joined(L.model[mi])), normA(txt))) return { first: L.wp[k], last: L.wp[Math.min(k + cnt - 1, L.wp.length - 1)], idx: k, cnt: cnt };
+    var mI = nonEmptyIdx(L.model, NotationEngine.joined), wI = nonEmptyIdx(L.wp, function (p) { return p.text; });
+    var rank = mI.indexOf(mi);
+    if (rank >= 0 && wI[rank] !== undefined) return { first: L.wp[wI[rank]], last: L.wp[wI[rank]], idx: wI[rank], cnt: 1 };
+    return null;
+  }
   function nonEmptyIdx(arr, getText) {
     var m = [];
     arr.forEach(function (x, i) { if (norm(getText(x))) m.push(i); });
@@ -226,12 +265,9 @@
     var runs = boxedLabelRuns(L.model);
     var res = { found: runs.length, done: 0, ng: 0 };
     if (!runs.length) return res;
-    var mIdx = nonEmptyIdx(L.model, NotationEngine.joined);
-    var wIdx = nonEmptyIdx(L.wp, function (p) { return p.text; });
     var work = runs.map(function (r) {
-      var rank = mIdx.indexOf(r.para);
-      var wp = (rank >= 0 && wIdx[rank] !== undefined) ? L.wp[wIdx[rank]] : null;
-      return { para: wp, text: r.text, occ: r.occ, pi: r.para };
+      var wf = wordParaOf(L, r.para);
+      return { para: wf ? wf.first : null, text: r.text, occ: r.occ, pi: r.para };
     });
     var searches = work.map(function (w) {
       if (!w.para) return null;
@@ -254,6 +290,7 @@
   // ---- STEP 2: 置換(変更履歴つき) ----
   // 手順: ①段落ごとに、変える場所を、変更前に全部探す(元の文字が基準なので、変更履歴の「削除された文字」に影響されない)
   //       ②探した場所を、後ろから順に変える ③最後に、文書を読み直して、予定どおりの文字になったか確かめる
+  function cm0Log(cm, lines) { lines.forEach(function (i) { log('  段落' + (i + 1) + ' [13 削除] 「' + short(NotationEngine.joined(cm[i])) + '」の行を削除します'); }); }
   async function doFix() {
     busy(true); logEl.textContent = ''; status('置換中…');
     var okN = 0, ngN = 0, boxStat = { n: 0, border: {}, texture: {}, color: {} }, boxFix = null, boxLeft0 = 0;
@@ -265,11 +302,13 @@
         var changes = NotationEngine.fixAll(d.model);
         var edits = NotationEngine.collectEdits(d.model);
         var expected = d.model.map(NotationEngine.joined);
-        var omega = NotationEngine.planOmega(d.model);
+        var sp = NotationEngine.planStructure(d.model);   // 不要な行・空行の削除、Ω(元の段落の番号で)
+        var omega = sp.omega;
         var bplan = NotationEngine.planBodyBreak(d.model);
         var star = !!(omega && omega.kind === 'star');
-        expected = NotationEngine.simulateStructure(expected);
-        if (!edits.length && !omega && !bplan.length) { status('直す場所はありませんでした'); return; }
+        expected = NotationEngine.simulateStructure(d.model);
+        edits = edits.filter(function (e) { return sp.del.indexOf(e.para) < 0; });   // 削除する段落の中の変更は、しない
+        if (!edits.length && !omega && !sp.del.length && !bplan.length && !NotationEngine.planMerge(d.model).length) { status('直す場所はありませんでした'); return; }
 
         ctx.document.load('changeTrackingMode');
         await ctx.sync();
@@ -288,6 +327,16 @@
             okN++;
             log('  Ω: 小見出し(段落' + (omega.heading + 1) + ')のあとに、Ωだけの段落を' + (omega.kind === 'fill' ? '空行から作りました' : '入れました'));
           } catch (err) { ngN++; log('  × Ω の段落を入れられません: ' + errText(err)); }
+        }
+
+        // 不要な行(ルール13)と空行(空白2)の段落を、削除する(変更履歴つき)
+        if (sp.del.length) {
+          try {
+            sp.del.slice().sort(function (a, b) { return b - a; }).forEach(function (i) { d.wordParas[i].delete(); });
+            await ctx.sync();
+            okN += sp.del.length;
+            log('  削除: 不要な行 ' + sp.lines.length + ' 件・空行 ' + sp.empties.length + ' 件の段落を削除しました');
+          } catch (err) { ngN++; log('  × 段落の削除に失敗: ' + errText(err)); }
         }
 
         var byPara = {}, order = [];
@@ -363,25 +412,23 @@
         if (boxLeft0) boxFix = await fixRemainingBoxes(ctx);
 
         // ②c 本文2: 凡例の前に「。」と段落区切り(Enter)を入れる。段落の数が変わるので、最後に行う
-        if (bplan.length || star) {
+        {
           var Lx = await loadModel(ctx);
-          var mI = nonEmptyIdx(Lx.model, NotationEngine.joined), wI = nonEmptyIdx(Lx.wp, function (p) { return p.text; });
           if (star) {   // 小見出し★本文 → ★で改行して、Ωだけの段落を入れる(★は残す)
             try {
-              var hr = mI.indexOf(omega.para), hw = (hr >= 0 && wI[hr] !== undefined) ? Lx.wp[wI[hr]] : null;
+              var hi = NotationEngine.headingIndex(Lx.model), hwf = hi >= 0 ? wordParaOf(Lx, hi) : null, hw = hwf ? hwf.first : null;
               if (!hw) throw new Error('小見出しの場所を特定できません');
               var srs = hw.search('★', { matchCase: true }); srs.load('items'); await ctx.sync();
               if (srs.items.length <= omega.occ) throw new Error('★の位置が見つかりません');
               srs.items[omega.occ].insertText('\nΩ\n', 'After'); await ctx.sync();
               okN++; log('  ★: 小見出し(段落' + (omega.heading + 1) + ')の★のあとで改行し、Ωだけの段落を入れました(★は残します)');
               Lx = await loadModel(ctx);
-              mI = nonEmptyIdx(Lx.model, NotationEngine.joined); wI = nonEmptyIdx(Lx.wp, function (p) { return p.text; });
             } catch (err) { ngN++; log('  × ★での改行に失敗: ' + errText(err)); }
           }
           var bp = NotationEngine.planBodyBreak(Lx.model);
           bp.sort(function (x, y) { return y.para - x.para; });
           for (var bi = 0; bi < bp.length; bi++) {
-            var pl = bp[bi], rank = mI.indexOf(pl.para), wpar = (rank >= 0 && wI[rank] !== undefined) ? Lx.wp[wI[rank]] : null;
+            var pl = bp[bi], wfx = wordParaOf(Lx, pl.para), wpar = wfx ? (pl.end ? wfx.last : wfx.first) : null;
             if (!wpar) { ngN++; log('  × 本文2: 段落' + (pl.para + 1) + ' の場所を特定できません'); continue; }
             try {
               if (pl.end) { wpar.insertText('。', 'End'); await ctx.sync(); }
@@ -394,6 +441,21 @@
               log('  本文2: 段落' + (pl.para + 1) + (pl.end ? ' の最後に「。」を付けました' : ' の凡例の前に、' + (pl.addPeriod ? '「。」と' : '') + '改行を入れました'));
             } catch (err) { ngN++; log('  × 本文2: 段落' + (pl.para + 1) + ' の変更に失敗: ' + errText(err)); }
           }
+        }
+
+        // ②d 本文1: 凡例のかたまりに、すき間なく続く段落を、1つの段落につなぐ(段落記号を削除)
+        for (var mg = 0; mg < 30; mg++) {
+          var Lm = await loadModel(ctx), js = NotationEngine.planMerge(Lm.model);
+          if (!js.length) break;
+          try {
+            var wb = wordParaOf(Lm, js[0]), wa = wordParaOf(Lm, js[0] - 1);
+            if (!wb || !wa) throw new Error('段落の場所を特定できません');
+            wa.last.getRange('Content').getRange('End').expandTo(wb.first.getRange('Start')).delete();
+            await ctx.sync();
+            var Ln = await loadModel(ctx), js2 = NotationEngine.planMerge(Ln.model);
+            if (js2.length >= js.length) throw new Error('段落をつなげませんでした');
+            okN++; if (mg === 0) log('  本文1: 凡例のあとに続く段落(' + js.length + ' 件)を、1つの段落につなぎます');
+          } catch (err) { ngN++; log('  × 段落をつなげません: ' + errText(err)); break; }
         }
 
         // ③ 確かめる(空でない段落の並びを、予定と比べる)

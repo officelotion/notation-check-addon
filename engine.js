@@ -166,6 +166,8 @@
     }
     // 2c) ●2: ●小見出しのあとの文章では、【凡例】の直前の「。」を削除
     if (/^●/.test(joined(p))) log('●2', editPara(p, /。(?=【[対時場師費定保持申問電]】)/g, function () { return ''; }));
+    // 2d) ●1: ●小見出しと、そのあとの▶の間に、全角スペースを入れる
+    if (/^●/.test(joined(p))) log('●1', editPara(p, /(?<=^●[^▶\u3000\s]{1,40})▶/g, function () { return '\u3000▶'; }));
     // 3) M01 全角数字 → 半角数字
     log('M01', editPara(p, /[０-９]+/g, function (m) { return toHalfDigits(m[0]); }));
     // 4) M03 半角カッコ → 全角カッコ
@@ -302,11 +304,51 @@
     return a;
   }
 
-  // 構造の変更(★で改行・Ω・本文2)を、文字の並びの上で順に行った結果(確認用の予定)
-  function simulateStructure(texts) {
+  // ---- ルール13(不要な行の削除)・空白2(空行の削除)・本文1(凡例の段落をつなぐ) ----
+  var DEL_RES = [
+    /^[0-9０-９]{4}[\/／.][0-9０-９]{1,2}[\/／.][0-9０-９]{1,2}号?(?:原稿案)?$/,   // 「2026/10/25号」「2026/10/25号 原稿案」
+    /^講師(?:名)?読み/,                                                           // 講師読み・講師名読み
+    /^[0-9０-９]+文字$/, /^原稿案/, /^文字数[：:]/
+  ];
+  function isDeletableLine(p) { var x = tOf(p); return !!x && DEL_RES.some(function (re) { return re.test(x); }); }
+  function planStructure(paras) {
+    var del = {}, keep = [], i;
+    for (i = 0; i < paras.length; i++) { if (isDeletableLine(paras[i])) del[i] = true; else keep.push(i); }
+    var sub = keep.map(function (k) { return paras[k]; }), om = planOmega(sub);
+    var fillOrig = (om && om.kind === 'fill') ? keep[om.para] : -1, omO = null;
+    if (om) { omO = {}; for (var k in om) omO[k] = om[k]; ['para', 'before', 'heading'].forEach(function (key) { if (om[key] !== undefined) omO[key] = keep[om[key]]; }); }
+    var emptyDel = [];
+    keep.forEach(function (oi) { var p = paras[oi]; if (!tOf(p) && !p.hasObj && oi !== fillOrig) emptyDel.push(oi); });
+    var lines = Object.keys(del).map(Number);
+    return { lines: lines, empties: emptyDel, del: lines.concat(emptyDel).sort(function (a, b) { return a - b; }), omega: omO };
+  }
+  // 凡例のかたまり(【時】【対】で始まる段落)に、すき間なく続く段落は、1つの段落につなぐ。つなぐ段落(j)の番号を返す
+  function planMerge(paras) {
+    var h = headingIndex(paras), out = [], s = -1, i;
+    if (h < 0) return out;
+    for (i = h + 1; i < paras.length; i++) if (/^【(?:時|対)】/.test(joined(paras[i]))) { s = i; break; }
+    if (s < 0) return out;
+    for (i = s + 1; i < paras.length; i++) {
+      var x = tOf(paras[i]);
+      if (!x || /^https?:/i.test(x) || isDeletableLine(paras[i])) break;
+      out.push(i);
+    }
+    return out;
+  }
+  function applyMergeToTexts(texts, js) {
+    if (!js.length) return texts.slice();
+    var a = texts.slice(), s = js[0] - 1;
+    for (var k = 0; k < js.length; k++) a[s] += a[js[k]];
+    return a.filter(function (t, i) { return js.indexOf(i) < 0; });
+  }
+  // 構造の変更(不要な行の削除・★で改行・Ω・本文2・本文1)を、文字の並びの上で順に行った結果(確認用の予定)。paras は段落、または文字の配列
+  function simulateStructure(input) {
+    var paras = input.map(function (x) { return typeof x === 'string' ? { runs: x ? [{ text: x, boxed: false }] : [] } : x; });
     var mk = function (t) { return { runs: t ? [{ text: t, boxed: false }] : [] }; };
-    var a = applyOmegaToTexts(texts, planOmega(texts.map(mk)));
-    return applyBreakToTexts(a, planBodyBreak(a.map(mk)));
+    var rest = paras.filter(function (p) { return !isDeletableLine(p); });
+    var a = applyOmegaToTexts(rest.map(joined), planOmega(rest));
+    a = applyBreakToTexts(a, planBodyBreak(a.map(mk)));
+    return applyMergeToTexts(a, planMerge(a.map(mk)));
   }
 
   function fixAll(paras) {
@@ -365,7 +407,7 @@
   return {
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
     fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
-    simulateStructure: simulateStructure, planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
+    simulateStructure: simulateStructure, planStructure: planStructure, planMerge: planMerge, headingIndex: headingIndex, isDeletableLine: isDeletableLine, planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
     collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };
