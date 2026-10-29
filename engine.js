@@ -107,6 +107,13 @@
     return edits;
   }
 
+  function editAt(p, s, e, t) {
+    var text = joined(p), before = text.slice(s, e), ed = { s: s, e: e, t: t, before: before, occ: countBefore(text, before, s) };
+    applyEdit(p, ed);
+    pieceEdit(p, s, e, t, false);
+    return ed;
+  }
+
   function applyEdit(p, ed) {
     var pos = 0, first = true;
     for (var i = 0; i < p.runs.length; i++) {
@@ -232,20 +239,39 @@
   function tOf(p) { return joined(p).replace(/[\s\u3000\v]+/g, ''); }
   function headingIndex(paras) {   // 小見出し=最初の行(連載タイトルなら、その次の行)。なければ -1
     var h = -1, i;
-    for (i = 0; i < paras.length; i++) if (tOf(paras[i])) { h = i; break; }
+    for (i = 0; i < paras.length; i++) if (tOf(paras[i]) && !isDeletableLine(paras[i])) { h = i; break; }
     if (h < 0) return -1;
     var SKIPH = function (p) { var x = tOf(p); return /第[0-9０-９]+回/.test(x) || /^[0-9０-９]{4}[\/／.][0-9０-９]{1,2}[\/／.][0-9０-９]{1,2}号?$/.test(x); };   // 連載タイトル・号数の行
     if (SKIPH(paras[h])) {
       var h2 = -1;
-      for (i = h + 1; i < paras.length; i++) if (tOf(paras[i])) { h2 = i; break; }
+      for (i = h + 1; i < paras.length; i++) if (tOf(paras[i]) && !isDeletableLine(paras[i])) { h2 = i; break; }
       return h2;
     }
     return h;
+  }
+
+  // ---- 構2: 小見出し+凡例だけで本文がない文書。Ωは入れず、「●小見出し　【時】…」の1つの段落にする ----
+  // 戻り値: null / {kind:'inline', heading:h, idx}(小見出しと凡例が同じ段落) / {kind:'join', heading:h, legend:n, idx}(凡例が次の段落)
+  function kou2Info(paras) {
+    var h = headingIndex(paras);
+    if (h < 0) return null;
+    var reL = /【(?:時|対)】/, ht = joined(paras[h]), m = reL.exec(ht), i;
+    if (m) {
+      var pre = ht.slice(0, m.index);
+      if (m.index > 0 && m.index <= 60 && !/[。！？★]/.test(pre)) return { kind: 'inline', heading: h, idx: m.index };
+      return null;
+    }
+    for (i = h + 1; i < paras.length; i++) if (tOf(paras[i]) && !isDeletableLine(paras[i])) break;
+    if (i >= paras.length) return null;
+    var t = joined(paras[i]); m = reL.exec(t);
+    if (m && m.index <= 3 && !/[。！？]/.test(t.slice(0, m.index))) return { kind: 'join', heading: h, legend: i, idx: m.index };
+    return null;
   }
   function planOmega(paras) {
     function t(p) { return tOf(p); }
     var h = headingIndex(paras), i;
     if (h < 0) return null;
+    if (kou2Info(paras)) return null;     // 構2: Ωは入れない
     if (t(paras[h]) === 'Ω') return null;
     var ht = joined(paras[h]), sm = /★(?=[^\s\u3000★])/.exec(ht);
     if (sm) return { kind: 'star', para: h, idx: sm.index + 1, occ: (ht.slice(0, sm.index).match(/★/g) || []).length, heading: h };   // 小見出し★本文 → ★で改行してΩ(★は残す)
@@ -274,7 +300,7 @@
   function needPeriod(c) { return !/[\s\u3000。！？!?」』）)］\]、，,.．・：:；;…―—\-】]/.test(c); }
   function planBodyBreak(paras) {
     var h = headingIndex(paras), out = [], i;
-    if (h < 0) return out;
+    if (h < 0 || kou2Info(paras)) return out;     // 構2は、凡例の前で段落を分けない
     for (i = h + 1; i < paras.length; i++) {
       var t = joined(paras[i]), m = /【(?:対|時)】/.exec(t);
       if (!m || tOf(paras[i]) === 'Ω') continue;
@@ -308,7 +334,8 @@
   var DEL_RES = [
     /^[0-9０-９]{4}[\/／.][0-9０-９]{1,2}[\/／.][0-9０-９]{1,2}号?(?:原稿案)?$/,   // 「2026/10/25号」「2026/10/25号 原稿案」
     /^講師(?:名)?読み/,                                                           // 講師読み・講師名読み
-    /^[0-9０-９]+文字$/, /^原稿案/, /^文字数[：:]/
+    /^[0-9０-９]+文字$/, /^原稿案/, /^文字数[：:]/,
+    /^「広報たちかわ」の横書き/, /^凡例[：:]/, /^【?公開する会議日程】?$/                 // 構2: 原稿書式の説明・凡例の説明・見出し
   ];
   function isDeletableLine(p) { var x = tOf(p); return !!x && DEL_RES.some(function (re) { return re.test(x); }); }
   function planStructure(paras) {
@@ -326,7 +353,10 @@
   function planMerge(paras) {
     var h = headingIndex(paras), out = [], s = -1, i;
     if (h < 0) return out;
-    for (i = h + 1; i < paras.length; i++) if (/^【(?:時|対)】/.test(joined(paras[i]))) { s = i; break; }
+    var k = kou2Info(paras);
+    if (k && k.kind === 'join') { for (i = h + 1; i <= k.legend; i++) out.push(i); s = k.legend; }   // 小見出しと凡例の段落をつなぐ(間の空行も)
+    else if (k) s = h;
+    else for (i = h + 1; i < paras.length; i++) if (/^【(?:時|対)】/.test(joined(paras[i]))) { s = i; break; }
     if (s < 0) return out;
     for (i = s + 1; i < paras.length; i++) {
       var x = tOf(paras[i]);
@@ -338,6 +368,7 @@
   function applyMergeToTexts(texts, js) {
     if (!js.length) return texts.slice();
     var a = texts.slice(), s = js[0] - 1;
+    while (s > 0 && !a[s]) s--;
     for (var k = 0; k < js.length; k++) a[s] += a[js[k]];
     return a.filter(function (t, i) { return js.indexOf(i) < 0; });
   }
@@ -355,6 +386,22 @@
     var all = [];
     var hd = headingIndex(paras);
     paras.forEach(function (p, i) { fixParagraph(p, { stripLead: hd >= 0 && i > hd }).forEach(function (c) { c.para = i; all.push(c); }); });
+    // 構2: 「●」と、小見出しと凡例のあいだの全角スペース(変換後の【時】【対】を目印にする)
+    var keep = [];
+    paras.forEach(function (p, i) { if (!isDeletableLine(p)) keep.push(i); });
+    var k = kou2Info(keep.map(function (i) { return paras[i]; }));
+    if (k) {
+      var hi = keep[k.heading], hp = paras[hi], ht = joined(hp), ed;
+      function rec(pi, e) { all.push({ rule: '構2', before: e.before, after: e.t, occ: e.occ, para: pi }); }
+      if (k.kind === 'inline') {
+        var pc = ht.charAt(k.idx - 1);
+        if (pc && !/[\u3000\s]/.test(pc)) { ed = editAt(hp, k.idx - 1, k.idx, pc + '\u3000'); rec(hi, ed); }
+      } else {
+        var li = keep[k.legend], lp = paras[li];
+        if (k.idx === 0 && !/[\u3000\s]$/.test(ht)) { ed = editAt(lp, 0, 1, '\u3000' + joined(lp).charAt(0)); rec(li, ed); }
+      }
+      if (!/^●/.test(joined(hp))) { ed = editAt(hp, 0, 1, '●' + joined(hp).charAt(0)); rec(hi, ed); }
+    }
     return all;
   }
   function findAll(paras) {
@@ -408,7 +455,7 @@
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
     fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
     simulateStructure: simulateStructure, planStructure: planStructure, planMerge: planMerge, headingIndex: headingIndex, isDeletableLine: isDeletableLine, planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
-    collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
+    kou2Info: kou2Info, collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };
 });
