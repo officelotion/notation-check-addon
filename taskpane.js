@@ -517,8 +517,16 @@
         async function collect() {
           var ps = sel.paragraphs; ps.load('items');
           await ctx.sync();
-          var lists = ps.items.map(function (p) { var t = p.getRange('Whole').getTrackedChanges(); t.load('items/date,items/type,items/text'); return t; });
+          // 段落の先頭に追加された文字(例: 【時】)は、その段落の変更履歴として返らないことがあるため、
+          // 前の段落〜あとの段落までの広い範囲から集める
+          var first = ps.items[0], last = ps.items[ps.items.length - 1];
+          var prevP = first.getPreviousOrNullObject(), nextP = last.getNextOrNullObject();
+          prevP.load('isNullObject'); nextP.load('isNullObject');
           await ctx.sync();
+          var wide = (prevP.isNullObject ? first : prevP).getRange('Start').expandTo((nextP.isNullObject ? last : nextP).getRange('End'));
+          var tcs = wide.getTrackedChanges(); tcs.load('items/date,items/type,items/text');
+          await ctx.sync();
+          var lists = [tcs];
           var cand = [];
           lists.forEach(function (l) { l.items.forEach(function (tc) { cand.push({ tc: tc, rel: tc.getRange().compareLocationWith(sel) }); }); });
           await ctx.sync();
@@ -564,7 +572,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.7.1');
+    log('アドイン v0.7.2');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
