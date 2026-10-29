@@ -505,37 +505,54 @@
       await Word.run(async function (ctx) {
         var sel = ctx.document.getSelection();
         sel.load('isEmpty');
-        var paras = sel.paragraphs; paras.load('items');
         await ctx.sync();
         if (sel.isEmpty) { status('範囲を選択してください'); log('元に戻したい範囲を、ドラッグで選択してから押してください。'); return; }
-        var lists = paras.items.map(function (p) { var t = p.getRange('Whole').getTrackedChanges(); t.load('items/date,items/type,items/text'); return t; });
-        await ctx.sync();
-        var cand = [];
-        lists.forEach(function (l) { l.items.forEach(function (tc) { cand.push({ tc: tc, rel: tc.getRange().compareLocationWith(sel) }); }); });
-        await ctx.sync();
-        // 段落記号の削除(つないだ段落)と、Ωの段落の追加は、選択に触れた段落のものなら、位置にかかわらず戻す対象にする
         function isParaMark(tc) {
           var tx = String(tc.text || '');
           return (tc.type === 'Deleted' && /^[\r\n\u000b\u0007]+$/.test(tx)) || (tc.type === 'Added' && /^Ω[\r\n\u0007]*$/.test(tx));
         }
-        var hit = cand.filter(function (c) { return ['Before', 'After', 'Unrelated'].indexOf(c.rel.value) < 0 || isParaMark(c.tc); });
-        if (!hit.length) { status('選択範囲に変更履歴はありません'); return; }
         var since = 0;
         try { since = parseInt(localStorage.getItem(LS_KEY) || '0', 10) || 0; } catch (e) { /* なし */ }
-        var mine = (all || !since) ? hit : hit.filter(function (c) { return c.tc.date && c.tc.date.getTime() >= since - 61000; });
-        var other = hit.length - mine.length;
-        if (!mine.length) {
+        // 選択に触れた段落の変更履歴を集める(Wordが変更を結合・分割することがあるため、戻したあとにもう一度集め直す)
+        async function collect() {
+          var ps = sel.paragraphs; ps.load('items');
+          await ctx.sync();
+          var lists = ps.items.map(function (p) { var t = p.getRange('Whole').getTrackedChanges(); t.load('items/date,items/type,items/text'); return t; });
+          await ctx.sync();
+          var cand = [];
+          lists.forEach(function (l) { l.items.forEach(function (tc) { cand.push({ tc: tc, rel: tc.getRange().compareLocationWith(sel) }); }); });
+          await ctx.sync();
+          var hit = cand.filter(function (c) { return ['Before', 'After', 'Unrelated'].indexOf(c.rel.value) < 0 || isParaMark(c.tc); });
+          var mine = (all || !since) ? hit : hit.filter(function (c) { return c.tc.date && c.tc.date.getTime() >= since - 61000; });
+          return { hit: hit, mine: mine };
+        }
+        function show(c) { var t = String(c.tc.text || '').replace(/[\r\n\u000b\u0007]/g, '¶'); if (t.length > 12) t = t.slice(0, 12) + '…'; return c.tc.type + '「' + t + '」' + c.rel.value; }
+        var r = await collect();
+        if (!r.hit.length) { status('選択範囲に変更履歴はありません'); return; }
+        if (!r.mine.length) {
           status('このアドインの変更は、選択範囲にありません');
-          log('選択範囲にある変更履歴 ' + hit.length + ' 件は、アドインの修正より前のものです。残しました。\nすべて戻したいときは「選択範囲のすべての変更履歴を戻す」を使ってください。');
+          log('選択範囲にある変更履歴 ' + r.hit.length + ' 件は、アドインの修正より前のものです。残しました。\nすべて戻したいときは「選択範囲のすべての変更履歴を戻す」を使ってください。');
           return;
         }
-        var kinds = {}, rels = {};
-        mine.forEach(function (c) { kinds[c.tc.type] = (kinds[c.tc.type] || 0) + 1; rels[c.rel.value] = (rels[c.rel.value] || 0) + 1; });
-        mine.forEach(function (c) { c.tc.reject(); });
-        await ctx.sync();
-        status('選択範囲の変更を ' + mine.length + ' 件、元に戻しました');
+        var other = r.hit.length - r.mine.length, total = 0, kinds = {}, rels = {}, pass = 0;
+        log('【戻す前の変更履歴(種類「文字」位置)】\n' + r.mine.map(show).join('\n'));
+        while (r.mine.length && pass < 6) {
+          pass++;
+          r.mine.forEach(function (c) { kinds[c.tc.type] = (kinds[c.tc.type] || 0) + 1; rels[c.rel.value] = (rels[c.rel.value] || 0) + 1; });
+          // 後ろから戻す(前の変更の位置が、あとの変更でずれないように)
+          for (var i = r.mine.length - 1; i >= 0; i--) { r.mine[i].tc.reject(); }
+          await ctx.sync();
+          total += r.mine.length;
+          var prev = r.mine.length;
+          r = await collect();
+          if (r.mine.length) log('(' + pass + '回目のあとに、まだ ' + r.mine.length + ' 件残っていたので、もう一度戻します)');
+          if (r.mine.length >= prev && pass >= 3) break;
+        }
+        status('選択範囲の変更を ' + total + ' 件、元に戻しました');
         log('内訳: ' + Object.keys(kinds).map(function (k) { return k + ' ' + kinds[k]; }).join(' / '));
         log('選択範囲との位置関係: ' + Object.keys(rels).map(function (k) { return k + ' ' + rels[k]; }).join(' / '));
+        if (r.mine.length) log('【戻せなかった変更 ' + r.mine.length + ' 件】\n' + r.mine.map(show).join('\n'));
+        else log('戻したあとの確認: 選択範囲にアドインの変更は残っていません');
         if (other) log('アドインの修正より前の変更履歴 ' + other + ' 件は、残しました。');
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e) + '\n(選択範囲の取り消しに対応していないWordかもしれません。「テスト情報」で WordApi 1.6 を確認してください)'); }
@@ -547,7 +564,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.7');
+    log('アドイン v0.7.1');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
