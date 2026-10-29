@@ -43,7 +43,7 @@
   function errText(e) { return (e && (e.code ? e.code + ': ' : '') + (e.message || e)) || '不明'; }
 
   // ---- 文書(OOXML) → 段落モデル(engine.js用) ----
-  function buildModel(ooxml) {
+  function buildModel(ooxml, noMerge) {   // noMerge: 段落記号が削除されていても、Wordの段落と同じく別々に数える(最初の読み込み用)
     var dom = new DOMParser().parseFromString(ooxml, 'application/xml');
     var body = dom.getElementsByTagNameNS(W_NS, 'body')[0];
     if (!body) throw new Error('文書の中身(w:body)が見つかりません');
@@ -108,7 +108,7 @@
           collect(c, p);
           if (c.getElementsByTagNameNS(W_NS, 'drawing').length || c.getElementsByTagNameNS(W_NS, 'pict').length) p.hasObj = true;
           // 段落記号が変更履歴で削除されている(=次の段落とつながる)。ただし、段落ぜんたいの削除(中身がない)は、別の段落のまま数える
-          carry = markDeleted(c) && p.runs.length > 0;
+          carry = !noMerge && markDeleted(c) && p.runs.length > 0;
         }
         else walk(c);
       }
@@ -118,18 +118,18 @@
   }
 
   // 文書を読み込む(解析した段落 model と、Wordの段落 wp)
-  async function loadModel(ctx) {
+  async function loadModel(ctx, noMerge) {
     var body = ctx.document.body;
     var ox = body.getOoxml();
     var ps = body.paragraphs;
     ps.load('items/text');
     await ctx.sync();
-    return { model: buildModel(ox.value), wp: ps.items.slice() };
+    return { model: buildModel(ox.value, noMerge), wp: ps.items.slice() };
   }
   // 解析した段落とWordの段落を、文字で照合して対応づける。
   // 片方にだけある「空の段落」(getOoxmlが末尾に足すことがある)は、読み飛ばす。文字が食い違えば、そこで止める
   async function readDocument(ctx) {
-    var L = await loadModel(ctx), model = L.model, wp = L.wp;
+    var L = await loadModel(ctx, true), model = L.model, wp = L.wp;
     var m2 = [], w2 = [], skipped = [], bad = null, i = 0, j = 0;
     while (i < model.length || j < wp.length) {
       var mt = i < model.length ? normA(markedText(model[i])) : null;
@@ -508,12 +508,17 @@
         var paras = sel.paragraphs; paras.load('items');
         await ctx.sync();
         if (sel.isEmpty) { status('範囲を選択してください'); log('元に戻したい範囲を、ドラッグで選択してから押してください。'); return; }
-        var lists = paras.items.map(function (p) { var t = p.getRange('Whole').getTrackedChanges(); t.load('items/date,items/type'); return t; });
+        var lists = paras.items.map(function (p) { var t = p.getRange('Whole').getTrackedChanges(); t.load('items/date,items/type,items/text'); return t; });
         await ctx.sync();
         var cand = [];
         lists.forEach(function (l) { l.items.forEach(function (tc) { cand.push({ tc: tc, rel: tc.getRange().compareLocationWith(sel) }); }); });
         await ctx.sync();
-        var hit = cand.filter(function (c) { return ['Before', 'After', 'Unrelated'].indexOf(c.rel.value) < 0; });
+        // 段落記号の削除(つないだ段落)と、Ωの段落の追加は、選択に触れた段落のものなら、位置にかかわらず戻す対象にする
+        function isParaMark(tc) {
+          var tx = String(tc.text || '');
+          return (tc.type === 'Deleted' && /^[\r\n\u000b\u0007]+$/.test(tx)) || (tc.type === 'Added' && /^Ω[\r\n\u0007]*$/.test(tx));
+        }
+        var hit = cand.filter(function (c) { return ['Before', 'After', 'Unrelated'].indexOf(c.rel.value) < 0 || isParaMark(c.tc); });
         if (!hit.length) { status('選択範囲に変更履歴はありません'); return; }
         var since = 0;
         try { since = parseInt(localStorage.getItem(LS_KEY) || '0', 10) || 0; } catch (e) { /* なし */ }
@@ -542,7 +547,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.3.2');
+    log('アドイン v0.7');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
