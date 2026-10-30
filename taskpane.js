@@ -6,7 +6,7 @@
   var LS_KEY = 'notationcheck_lastFixAt';
   var $ = function (id) { return document.getElementById(id); };
   var logEl, statusEl;
-  var BUTTONS = ['btnCheck', 'btnFix', 'btnUndoSel', 'btnUndoAll', 'btnInfo', 'btnCopy'];
+  var BUTTONS = ['btnCheck', 'btnFix', 'btnUndoSel', 'btnUndoAll', 'btnMark', 'btnInfo', 'btnCopy'];
 
   function log(msg) { logEl.textContent += msg + '\n'; logEl.scrollTop = logEl.scrollHeight; }
   function status(msg) { statusEl.textContent = msg; }
@@ -266,19 +266,24 @@
     var res = { found: runs.length, done: 0, ng: 0 };
     if (!runs.length) return res;
     var work = runs.map(function (r) {
-      var wf = wordParaOf(L, r.para);
-      return { para: wf ? wf.first : null, text: r.text, occ: r.occ, pi: r.para };
+      var wf = wordParaOf(L, r.para), group = [];
+      // つながった段落(段落記号が削除済み)は、Wordでは別々の段落のまま。グループ全体から探す
+      if (wf) for (var g = 0; g < wf.cnt && wf.idx + g < L.wp.length; g++) group.push(L.wp[wf.idx + g]);
+      if (wf && !group.length) group.push(wf.first);
+      return { paras: group, text: r.text, occ: r.occ, pi: r.para };
     });
     var searches = work.map(function (w) {
-      if (!w.para) return null;
-      var rs = w.para.search(w.text, { matchCase: true });
-      rs.load('items/text');
-      return rs;
+      return w.paras.map(function (p) {
+        var rs = p.search(w.text, { matchCase: true });
+        rs.load('items/text');
+        return rs;
+      });
     });
     await ctx.sync();
     for (var i = work.length - 1; i >= 0; i--) {
       var w = work[i];
-      var cands = searches[i] ? searches[i].items.filter(function (r) { return r.text === w.text; }) : [];
+      var cands = [];
+      searches[i].forEach(function (rs) { rs.items.forEach(function (r) { if (r.text === w.text) cands.push(r); }); });
       var t = cands[w.occ];
       if (!t) { res.ng++; log('  × ' + show(w.text) + '(解析' + (w.pi + 1) + '番目の段落)の場所を特定できません'); continue; }
       try { t.insertOoxml(ooxmlPlainRun(w.text), 'Replace'); await ctx.sync(); res.done++; }
@@ -496,6 +501,33 @@
     busy(false);
   }
 
+
+  // ---- TEST用: ▽月日(▷にするか未定)を、黄色でマークして、コメントをつける ----
+  async function doMarkTriangle() {
+    busy(true); logEl.textContent = ''; status('マーク中…');
+    try {
+      await Word.run(async function (ctx) {
+        var rs = ctx.document.body.search('▽[0-9０-９]{1,2}月', { matchWildcards: true });
+        rs.load('items/text');
+        await ctx.sync();
+        if (!rs.items.length) { status('▽月日は、見つかりませんでした'); log('▽(数字)月 の形は、文書にありません。'); return; }
+        var n = 0, nc = 0;
+        for (var i = 0; i < rs.items.length; i++) {
+          rs.items[i].font.highlightColor = '#FFFF00';
+          n++;
+        }
+        await ctx.sync();
+        try {
+          for (var j = 0; j < rs.items.length; j++) rs.items[j].insertComment('▷にするか未定(TEST用のマークです)');
+          await ctx.sync(); nc = rs.items.length;
+        } catch (e) { log('(コメントはつけられませんでした: ' + errText(e).slice(0, 80) + ')'); }
+        status('▽月日を ' + n + ' 件、黄色でマークしました');
+        log('黄色のマーク: ' + n + ' 件 / コメント: ' + nc + ' 件\nマークは、校閲タブの変更履歴(書式)にも記録されます。いらなければ、「選択範囲の、すべての変更履歴を戻す」で戻せます。');
+      });
+    } catch (e) { status('エラー'); log('エラー: ' + errText(e)); }
+    busy(false);
+  }
+
   // ---- STEP 3: 選択範囲の変更を元に戻す ----
   // 「対」→「【対】」は、削除と追加の2つの変更になる。選択の端に接する側が漏れると、文字が消えたように見えるため、
   // 選択範囲に「重なる」「隣り合う」変更を、段落ごとに集めて、まとめて戻す
@@ -572,7 +604,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.8.1');
+    log('アドイン v0.8.2');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
@@ -603,6 +635,7 @@
     $('btnFix').onclick = doFix;
     $('btnUndoSel').onclick = function () { doUndo(false); };
     $('btnUndoAll').onclick = function () { doUndo(true); };
+    $('btnMark').onclick = doMarkTriangle;
     $('btnInfo').onclick = doInfo;
     $('btnCopy').onclick = doCopy;
     status('準備できました。まず「チェックする」を押してください');
