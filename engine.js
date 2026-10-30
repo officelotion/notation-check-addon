@@ -194,6 +194,9 @@
   function findParagraph(p) {
     var out = [], text = joined(p), re = /(?:[℡☎]|【電】)内線/g, m;
     while ((m = re.exec(text)) !== null) out.push({ rule: '08', text: m[0], index: m.index });
+    // ▽月日: ▷にするかは未決定。複数例が確認できるまで、チェックのみ(注意喚起)
+    var re2 = /▽(?=[0-9０-９]+月)/g;
+    while ((m = re2.exec(text)) !== null) out.push({ rule: '▽', text: text.slice(m.index, m.index + 6), index: m.index, note: '(▷にするかは未決定。自動では直しません)' });
     return out;
   }
 
@@ -397,8 +400,8 @@
         var pc = ht.charAt(k.idx - 1);
         if (pc && !/[\u3000\s]/.test(pc)) { ed = editAt(hp, k.idx - 1, k.idx, pc + '\u3000'); rec(hi, ed); }
       } else {
-        var li = keep[k.legend], lp = paras[li];
-        if (k.idx === 0 && !/[\u3000\s]$/.test(ht)) { ed = editAt(lp, 0, 1, '\u3000' + joined(lp).charAt(0)); rec(li, ed); }
+        // 全角スペースは、凡例(枠つきの文字を置き換えたもの)ではなく、小見出しの最後の文字につける(枠が移らないように)
+        if (k.idx === 0 && ht && !/[\u3000\s]$/.test(ht)) { ed = editAt(hp, ht.length - 1, ht.length, ht.charAt(ht.length - 1) + '\u3000'); rec(hi, ed); }
       }
       if (!/^●/.test(joined(hp))) { ed = editAt(hp, 0, 1, '●' + joined(hp).charAt(0)); rec(hi, ed); }
     }
