@@ -173,6 +173,8 @@
     }
     // 2c) ●2: ●小見出しのあとの文章では、【凡例】の直前の「。」を削除
     if (/^●/.test(joined(p))) log('●2', editPara(p, /。(?=【[対時場師費定保持申問電]】)/g, function () { return ''; }));
+    // 2c2) ▽月日 → ▷月日(担当スタッフの確認で決定)
+    log('▽', editPara(p, /▽(?=[0-9０-９]+月)/g, function () { return '▷'; }));
     // 2d) ●1: ●小見出しと、そのあとの▶の間に、全角スペースを入れる
     if (/^●/.test(joined(p))) log('●1', editPara(p, /(?<=^●[^▶\u3000\s]{1,40})▶/g, function () { return '\u3000▶'; }));
     // 3) M01 全角数字 → 半角数字
@@ -194,9 +196,6 @@
   function findParagraph(p) {
     var out = [], text = joined(p), re = /(?:[℡☎]|【電】)内線/g, m;
     while ((m = re.exec(text)) !== null) out.push({ rule: '08', text: m[0], index: m.index });
-    // ▽月日: ▷にするかは未決定。複数例が確認できるまで、チェックのみ(注意喚起)
-    var re2 = /▽(?=[0-9０-９]+月)/g;
-    while ((m = re2.exec(text)) !== null) out.push({ rule: '▽', text: text.slice(m.index, m.index + 6), index: m.index, note: '(▷にするかは未決定。自動では直しません)' });
     return out;
   }
 
@@ -319,6 +318,26 @@
         }
       }
       break;   // 最初の凡例のかたまりだけ
+    }
+    return out;
+  }
+
+  // ---- 本文の最後が「？」「！」で終わるときは、黄色でマークする(「。」で終わるのが原則のイレギュラー) ----
+  // 戻り値: [ {para, idx, ch} ] para番目の段落の idx 文字目(本文の最後の文字)
+  function planEndMark(paras) {
+    var h = headingIndex(paras), out = [], i;
+    if (h < 0 || kou2Info(paras)) return out;
+    for (i = h + 1; i < paras.length; i++) {
+      var t = joined(paras[i]), m = /【(?:対|時)】/.exec(t);
+      if (!m || tOf(paras[i]) === 'Ω') continue;
+      var para = -1, txt = '';
+      if (m.index > 0) { para = i; txt = t.slice(0, m.index); }
+      else { var j = i - 1; if (j > h && tOf(paras[j]) && tOf(paras[j]) !== 'Ω' && !/^[【●]/.test(joined(paras[j]))) { para = j; txt = joined(paras[j]); } }
+      if (para >= 0) {
+        var end = txt.replace(/[\s\u3000\v]+$/, '').length, c = txt.charAt(end - 1);
+        if (/[？！?!]/.test(c)) out.push({ para: para, idx: end - 1, ch: c });
+      }
+      break;
     }
     return out;
   }
@@ -458,7 +477,7 @@
     LABEL_MAP: LABEL_MAP, joined: joined, editPara: editPara, fixParagraph: fixParagraph,
     fixAll: fixAll, findAll: findAll, findParagraph: findParagraph, findPlainLabels: findPlainLabels,
     simulateStructure: simulateStructure, planStructure: planStructure, planMerge: planMerge, headingIndex: headingIndex, isDeletableLine: isDeletableLine, planBodyBreak: planBodyBreak, applyBreakToTexts: applyBreakToTexts, planOmega: planOmega, applyOmegaToTexts: applyOmegaToTexts,
-    kou2Info: kou2Info, collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
+    kou2Info: kou2Info, planEndMark: planEndMark, collectEdits: collectEdits, classifyEdit: classifyEdit, isBoxedProps: isBoxedProps,
     countBefore: countBefore, nthIndex: nthIndex
   };
 });

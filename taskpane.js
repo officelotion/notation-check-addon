@@ -183,6 +183,9 @@
         NotationEngine.planBodyBreak(cm).forEach(function (pl) {
           log('  段落' + (pl.para + 1) + ' [本文2] ' + (pl.end ? '最後に「。」を付けます' : '凡例の前に、' + (pl.addPeriod ? '「。」と' : '') + '改行(段落区切り)を入れます'));
         });
+        NotationEngine.planEndMark(cm).forEach(function (pl) {
+          log('  段落' + (pl.para + 1) + ' [本文の最後] 「' + pl.ch + '」で終わっています(「。」が原則)。黄色でマークします');
+        });
         var sp2 = NotationEngine.planStructure(cm);
         if (sp2.lines.length) cm0Log(cm, sp2.lines);
         if (sp2.empties.length) log('  [空白2] 空行の段落 ' + sp2.empties.length + ' 件を削除します');
@@ -463,6 +466,19 @@
           } catch (err) { ngN++; log('  × 段落をつなげません: ' + errText(err)); break; }
         }
 
+        // ②e 本文の最後が「？」「！」で終わっているときは、黄色でマーク
+        try {
+          var Le = await loadModel(ctx), em = NotationEngine.planEndMark(Le.model);
+          for (var ei = 0; ei < em.length; ei++) {
+            var wfe = wordParaOf(Le, em[ei].para);
+            if (!wfe) { ngN++; log('  × 本文の最後のマーク: 段落' + (em[ei].para + 1) + ' の場所を特定できません'); continue; }
+            var rse = wfe.last.search(em[ei].ch, { matchCase: true }); rse.load('items'); await ctx.sync();
+            if (!rse.items.length) { ngN++; log('  × 本文の最後のマーク: 「' + em[ei].ch + '」が見つかりません'); continue; }
+            rse.items[rse.items.length - 1].font.highlightColor = '#FFFF00'; await ctx.sync();
+            okN++; log('  本文の最後が「' + em[ei].ch + '」で終わっているので、黄色でマークしました(段落' + (em[ei].para + 1) + ')');
+          }
+        } catch (err) { ngN++; log('  × 本文の最後のマークに失敗: ' + errText(err)); }
+
         // ③ 確かめる(空でない段落の並びを、予定と比べる)
         var L2 = await loadModel(ctx);
         var act = L2.model.map(function (p) { return norm(NotationEngine.joined(p)); }).filter(function (t) { return t; });
@@ -604,7 +620,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.8.2');
+    log('アドイン v0.8.4');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
