@@ -4,6 +4,17 @@
   'use strict';
   var W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   var LS_KEY = 'notationcheck_lastFixAt';
+  var LS_RUNS = 'notationcheck_fixRuns';   // v0.8.6: 変換した実行ごとの時間帯 [{s:開始, e:終了}] を全部残す
+  function loadRuns() {
+    var a = [];
+    try { a = JSON.parse(localStorage.getItem(LS_RUNS) || '[]') || []; } catch (e) { a = []; }
+    return Array.isArray(a) ? a : [];
+  }
+  function saveRuns(a) {
+    var cut = Date.now() - 24 * 3600 * 1000;   // 24時間より古い記録は捨てる(その日のうちの作業が前提)
+    a = a.filter(function (r) { return r && r.e >= cut; }).slice(-100);
+    try { localStorage.setItem(LS_RUNS, JSON.stringify(a)); } catch (e) { /* 保存できなくても続ける */ }
+  }
   var $ = function (id) { return document.getElementById(id); };
   var logEl, statusEl;
   var BUTTONS = ['btnCheck', 'btnFix', 'btnUndoSel', 'btnUndoAll', 'btnMark', 'btnInfo', 'btnCopy'];
@@ -310,7 +321,7 @@
   async function doFix() {
     busy(true); logEl.textContent = ''; status('置換中…');
     var okN = 0, ngN = 0, boxStat = { n: 0, border: {}, texture: {}, color: {} }, boxFix = null, boxLeft0 = 0;
-    var prevMode = null, modeChanged = false;
+    var prevMode = null, modeChanged = false, runStamp = null;
     try {
       await Word.run(async function (ctx) {
         var d = await readDocument(ctx);
@@ -333,6 +344,8 @@
         await ctx.sync();
         modeChanged = true;
         try { localStorage.setItem(LS_KEY, String(Date.now())); } catch (e) { /* 保存できなくても続ける */ }
+        runStamp = { s: Date.now(), e: Date.now() };
+        saveRuns(loadRuns().concat([runStamp]));
 
         // Ω: 小見出しのあとに、Ωだけの段落を入れる(空行があれば、Ωにする)。ほかの変更より先に行う
         if (omega && !star) {
@@ -517,6 +530,8 @@
         }
       });
     } catch (e) { status('エラー'); log('エラー: ' + errText(e) + (e.debugInfo ? '\n' + JSON.stringify(e.debugInfo) : '')); }
+    // v0.8.6: 実行の終了時刻を記録する(この時間帯の変更履歴を、アドインの変更とみなす)
+    if (runStamp) { var rs0 = loadRuns(); for (var ri = rs0.length - 1; ri >= 0; ri--) { if (rs0[ri].s === runStamp.s) { rs0[ri].e = Date.now(); break; } } saveRuns(rs0); }
     // 変更履歴の設定を、実行前に戻す
     if (modeChanged) {
       try { await Word.run(async function (ctx) { ctx.document.changeTrackingMode = prevMode; await ctx.sync(); }); }
@@ -569,6 +584,8 @@
         }
         var since = 0;
         try { since = parseInt(localStorage.getItem(LS_KEY) || '0', 10) || 0; } catch (e) { /* なし */ }
+        var runs = loadRuns();
+        if (!runs.length && since) runs = [{ s: since, e: Date.now() }];   // 古い版の記録だけがあるとき
         // 選択に触れた段落の変更履歴を集める(Wordが変更を結合・分割することがあるため、戻したあとにもう一度集め直す)
         async function collect() {
           var ps = sel.paragraphs; ps.load('items');
@@ -587,7 +604,11 @@
           lists.forEach(function (l) { l.items.forEach(function (tc) { cand.push({ tc: tc, rel: tc.getRange().compareLocationWith(sel) }); }); });
           await ctx.sync();
           var hit = cand.filter(function (c) { return ['Before', 'After', 'Unrelated'].indexOf(c.rel.value) < 0 || isParaMark(c.tc); });
-          var mine = (all || !since) ? hit : hit.filter(function (c) { return c.tc.date && c.tc.date.getTime() >= since - 61000; });
+          var mine = (all || !runs.length) ? hit : hit.filter(function (c) {
+            if (!c.tc.date) return false;
+            var t = c.tc.date.getTime();
+            return runs.some(function (r) { return t >= r.s - 61000 && t <= r.e + 61000; });   // どれか1回の変換の時間帯に入っていればOK
+          });
           return { hit: hit, mine: mine };
         }
         function show(c) { var t = String(c.tc.text || '').replace(/[\r\n\u000b\u0007]/g, '¶'); if (t.length > 12) t = t.slice(0, 12) + '…'; return c.tc.type + '「' + t + '」' + c.rel.value; }
@@ -628,7 +649,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.8.5');
+    log('アドイン v0.8.6');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');
