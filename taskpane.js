@@ -225,12 +225,20 @@
   function boxedLabelRuns(model) {
     var out = [];
     model.forEach(function (p, pi) {
-      var text = NotationEngine.joined(p), pos = 0;
+      var text = NotationEngine.joined(p), pos = 0, gStart = 0, gText = '';
+      // Wordは、全角の括弧と半角の英字(【e】の e など)を、別々のrunに分けることがある。続いている枠つきのrunは、つなげて調べる
+      function flush() {
+        if (gText) {
+          var re = /【[^【】]{1,4}】|[（）]/g, m;
+          while ((m = re.exec(gText)) !== null) out.push({ para: pi, text: m[0], occ: NotationEngine.countBefore(text, m[0], gStart + m.index) });
+        }
+        gText = '';
+      }
       p.runs.forEach(function (r) {
         var start = pos; pos += r.text.length;
-        var t = r.text.trim();
-        if (r.boxed && LABEL_RE.test(t)) out.push({ para: pi, text: t, occ: NotationEngine.countBefore(text, t, start) });
+        if (r.boxed) { if (!gText) gStart = start; gText += r.text; } else flush();
       });
+      flush();
     });
     return out;
   }
@@ -620,7 +628,7 @@
     logEl.textContent = '';
     var r = Office.context.requirements;
     function sup(set, v) { try { return r.isSetSupported(set, v) ? '○' : '×'; } catch (e) { return '?'; } }
-    log('アドイン v0.8.4');
+    log('アドイン v0.8.5');
     log('プラットフォーム: ' + (Office.context.platform || '?'));
     try { var dg = Office.context.diagnostics; if (dg) log('Word: ' + dg.version + ' / ' + dg.platform); } catch (e) { /* なし */ }
     log('対応状況(○=使える)');

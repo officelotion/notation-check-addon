@@ -359,7 +359,13 @@
     /^[0-9０-９]+文字$/, /^原稿案/, /^文字数[：:]/,
     /^「広報たちかわ」の横書き/, /^凡例[：:]/, /^【?公開する会議日程】?$/                 // 構2: 原稿書式の説明・凡例の説明・見出し
   ];
-  function isDeletableLine(p) { var x = tOf(p); return !!x && DEL_RES.some(function (re) { return re.test(x); }); }
+  // 講師名の読み(ひらがなだけ・間にスペースのある「すずき　としき」の形)の行
+  var KANA_READING = /^[ぁ-ゖー]{1,8}[\u3000 ]+[ぁ-ゖー]{1,8}$/;
+  function isDeletableLine(p) {
+    var x = tOf(p);
+    if (!x) return false;
+    return DEL_RES.some(function (re) { return re.test(x); }) || KANA_READING.test(joined(p).replace(/^[\s\u3000]+|[\s\u3000]+$/g, ''));
+  }
   function planStructure(paras) {
     var del = {}, keep = [], i;
     for (i = 0; i < paras.length; i++) { if (isDeletableLine(paras[i])) del[i] = true; else keep.push(i); }
